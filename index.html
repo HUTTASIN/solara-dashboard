@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SOLARA · Solar Panel Cleaning Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -29,14 +29,16 @@
   --shadow:0 10px 26px -14px rgba(80,60,20,.25);
 }
 *{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+img,svg{max-width:100%;}
 body{margin:0;background:
   radial-gradient(1200px 500px at 90% -10%, rgba(255,176,32,.07), transparent 60%),
   var(--bg);color:var(--text);font-family:var(--font-h);transition:background .2s;}
 button{font-family:inherit;}
-.app{display:flex;min-height:100vh;}
+.app{display:flex;min-height:100vh;min-height:100dvh;}
 /* Sidebar */
 .sidebar{width:220px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;padding:18px 12px;position:sticky;top:0;height:100vh;}
+  display:flex;flex-direction:column;padding:18px 12px;position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto;}
 .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 22px;font-weight:700;font-size:16px;}
 .brand .dot{width:26px;height:26px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(145deg,var(--accent),var(--accent-2));box-shadow:0 4px 14px -4px rgba(255,140,30,.6);font-size:14px;}
@@ -52,22 +54,77 @@ button{font-family:inherit;}
 .main{flex:1;min-width:0;}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;
   border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5;}
-.topbar h1{font-size:18px;margin:0;}
-.status-pill{display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 12px;border-radius:99px;
+.topbar h1{font-size:18px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.topbar>div:first-child{min-width:0;}
+.status-pill{flex-shrink:0;white-space:nowrap;display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 12px;border-radius:99px;
   border:1px solid var(--border);background:var(--panel);}
 .status-pill .sw{width:8px;height:8px;border-radius:50%;}
 .content{padding:22px 24px 60px;max-width:1280px;animation:fadein .35s ease;}
 @keyframes fadein{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 /* Grid */
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;
+.card{min-width:0;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;
   box-shadow:var(--shadow);transition:transform .15s, border-color .15s;}
 .card:hover{border-color:var(--muted-2);}
 .card h3{font-size:12.5px;margin:0 0 14px;color:var(--muted);font-weight:600;letter-spacing:.2px;}
-.c3{grid-column:span 3;} .c4{grid-column:span 4;} .c6{grid-column:span 6;} .c8{grid-column:span 8;} .c12{grid-column:span 12;}
-@media(max-width:900px){.c3,.c4,.c6,.c8{grid-column:span 12;} .sidebar{position:fixed;left:-240px;z-index:20;transition:left .2s;box-shadow:0 0 40px rgba(0,0,0,.3);}
-  .sidebar.open{left:0;} .menu-btn{display:inline-flex;}}
-.menu-btn{display:none;background:none;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 10px;cursor:pointer;}
+.c3{grid-column:span 3;} .c4{grid-column:span 4;} .c5{grid-column:span 5;} .c6{grid-column:span 6;} .c8{grid-column:span 8;} .c12{grid-column:span 12;}
+.menu-btn{display:none;background:none;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:16px;line-height:1;min-height:40px;}
+.backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:15;}
+.ip-row{display:flex;gap:8px;flex-wrap:wrap;}
+.ip-row input{flex:1 1 160px;min-width:0;}
+.ctrl-row{flex-wrap:wrap;}
+.btn{min-width:0;}
+.modal{width:min(320px,calc(100vw - 32px));}
+.toast{max-width:calc(100vw - 32px);}
+.table-wrap{-webkit-overflow-scrolling:touch;}
+table{min-width:520px;}
+.metric-big{font-size:clamp(24px,5vw,30px);}
+.content{margin-inline:auto;}
+
+/* ---- Responsive ---- */
+/* Large desktop */
+@media(min-width:1600px){.content{max-width:1440px;}}
+/* Laptop / small desktop */
+@media(max-width:1180px){
+  .c3,.c4{grid-column:span 6;} .c5,.c6,.c8{grid-column:span 12;}
+}
+/* Tablet & below: sidebar becomes a slide-in drawer */
+@media(max-width:900px){
+  .c3,.c4,.c5{grid-column:span 6;} .c6,.c8,#locationCard{grid-column:span 12;}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:240px;max-width:82vw;z-index:20;transform:translateX(-105%);
+    transition:transform .22s ease;box-shadow:none;visibility:hidden;
+    padding-top:calc(18px + env(safe-area-inset-top,0px));padding-bottom:calc(18px + env(safe-area-inset-bottom,0px));}
+  .sidebar.open{transform:none;visibility:visible;box-shadow:0 0 40px rgba(0,0,0,.4);}
+  .sidebar.open ~ .backdrop{display:block;}
+  .menu-btn{display:inline-flex;align-items:center;}
+  .nav-item{padding:12px;}
+  .topbar{padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0px));}
+  .content{padding:18px 16px 48px;}
+}
+/* Phones */
+@media(max-width:640px){
+  .grid{gap:12px;}
+  .c3,.c4,.c5,.c6,.c8{grid-column:span 12;}
+  .c3.stat{grid-column:span 6;}
+  .card{padding:14px;}
+  .topbar h1{font-size:16px;} .status-pill{font-size:12px;padding:5px 10px;}
+  .content{padding:14px 12px calc(40px + env(safe-area-inset-bottom,0px));}
+  .tabs{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;}
+  .tab{flex-shrink:0;}
+  .filters>*{flex:1 1 140px;min-width:0;}
+  .filters .btn{flex:1 1 120px!important;}
+  select,input[type=date],input,.ip-row input{font-size:16px;} /* prevents iOS zoom-on-focus */
+  .btn{min-height:44px;}
+  .toast{bottom:calc(16px + env(safe-area-inset-bottom,0px));}
+}
+/* Very small phones */
+@media(max-width:360px){
+  .c3.stat{grid-column:span 12;}
+  .brand{font-size:15px;} .status-pill .sw+span{max-width:90px;overflow:hidden;text-overflow:ellipsis;}
+}
+@media(hover:none){.card:hover{border-color:var(--border);}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+
 /* Metric */
 .metric-big{font-family:var(--font-d);font-size:30px;font-weight:600;}
 .metric-sub{font-size:12px;color:var(--muted);margin-top:4px;}
@@ -131,6 +188,7 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
     <div class="nav-item" data-view="settings"><span class="ic">⚙</span> ตั้งค่า</div>
     <div class="sidebar-foot">Unit SC-04 · Firmware 2.3.1<br><span id="linkModeLabel">โหมด: Mock data</span></div>
   </aside>
+  <div class="backdrop" id="backdrop"></div>
 
   <div class="main">
     <div class="topbar">
@@ -424,10 +482,10 @@ async function renderAnalytics(el){
   <div class="grid">
     <div class="card c6"><h3>แนวโน้มแรงดันแบตเตอรี่ (%)</h3>${lineChart(bt.labels,bt.values,'var(--accent)')}</div>
     <div class="card c6"><h3>เวลาที่ใช้ทำความสะอาดต่อรอบ (นาที)</h3>${barChart(cd.labels,cd.values,'var(--ok)')}</div>
-    <div class="card c3"><h3>รอบทำงานทั้งหมด</h3><div class="metric-big">52</div><div class="metric-sub">เดือนนี้</div></div>
-    <div class="card c3"><h3>เวลาเฉลี่ยต่อรอบ</h3><div class="metric-big">1:38</div><div class="metric-sub">ชม.:นาที</div></div>
-    <div class="card c3"><h3>อัตราสำเร็จ</h3><div class="metric-big" style="color:var(--ok)">92%</div><div class="metric-sub">จาก 52 รอบ</div></div>
-    <div class="card c3"><h3>Error สะสม</h3><div class="metric-big" style="color:var(--warn)">4</div><div class="metric-sub">เดือนนี้</div></div>
+    <div class="card c3 stat"><h3>รอบทำงานทั้งหมด</h3><div class="metric-big">52</div><div class="metric-sub">เดือนนี้</div></div>
+    <div class="card c3 stat"><h3>เวลาเฉลี่ยต่อรอบ</h3><div class="metric-big">1:38</div><div class="metric-sub">ชม.:นาที</div></div>
+    <div class="card c3 stat"><h3>อัตราสำเร็จ</h3><div class="metric-big" style="color:var(--ok)">92%</div><div class="metric-sub">จาก 52 รอบ</div></div>
+    <div class="card c3 stat"><h3>Error สะสม</h3><div class="metric-big" style="color:var(--warn)">4</div><div class="metric-sub">เดือนนี้</div></div>
   </div>`;
 }
 
@@ -475,8 +533,8 @@ function renderSettings(el){
     <div class="card c6">
       <h3>🔌 เชื่อมต่อบอร์ด ESP32</h3>
       <div class="metric-sub" style="margin-bottom:10px;">ใส่ IP ของ ESP32 ในเครือข่ายเดียวกัน เพื่อสลับจากข้อมูลจำลองไปใช้งานจริง</div>
-      <div style="display:flex;gap:8px;">
-        <input id="espIp" placeholder="192.168.1.50" style="flex:1;background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:var(--font-d);" value="${Device.ip}">
+      <div class="ip-row">
+        <input id="espIp" placeholder="192.168.1.50" style="background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:var(--font-d);" value="${Device.ip}">
         <button class="btn primary" id="espConnectBtn" style="flex:none;padding:9px 18px;">ทดสอบ</button>
       </div>
       <div style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:12.5px;">
@@ -519,6 +577,9 @@ async function nav(view){
   }
 }
 document.querySelectorAll('.nav-item').forEach(n=>n.onclick=()=>nav(n.dataset.view));
+document.getElementById('backdrop').onclick=()=>document.getElementById('sidebar').classList.remove('open');
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') document.getElementById('sidebar').classList.remove('open'); });
+window.addEventListener('resize',()=>{ if(innerWidth>900) document.getElementById('sidebar').classList.remove('open'); });
 nav('monitoring');
 if(Device.ip){
   Device.ping().then(ok=>{
