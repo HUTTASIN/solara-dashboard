@@ -27,16 +27,24 @@ Open the deployed site → **ตั้งค่า (Settings)** → enter the ES
 **ทดสอบ (Test)**. The IP is saved in the browser (localStorage) so it's
 remembered next time you open the dashboard on the same device/browser.
 
-The dashboard expects the ESP32 to serve plain JSON over HTTP:
+`Solasale_project.ino` (included in this folder) is the matching firmware —
+it joins your home Wi-Fi (`true_home2G_248`) as a station and serves:
 
-| Method | Path          | Purpose                                   |
-|--------|---------------|--------------------------------------------|
-| GET    | `/api/status` | battery, sensors, machine state           |
-| POST   | `/api/start`  | begin a cleaning cycle                    |
-| POST   | `/api/stop`   | stop the motor immediately                |
+| Method | Path                | Purpose                              |
+|--------|---------------------|----------------------------------------|
+| GET    | `/status`           | `{running, direction, position, speed}` |
+| GET    | `/run?dir=1`         | forward                                |
+| GET    | `/run?dir=-1`        | reverse                                |
+| GET    | `/stop`              | stop immediately                       |
+| GET    | `/speed?value=N`     | set speed, 50–2000 steps/sec           |
+
+Flash it with the Arduino IDE (board: an ESP32 dev board, e.g. "ESP32 Dev
+Module"). After it connects, open the Serial Monitor at 115200 baud to read
+the IP address it was assigned — that's what you type into the dashboard's
+Settings page.
 
 This logic lives in the `Device` object near the top of the `<script>` block
-in `index.html` — edit it to match your firmware's actual response shape.
+in `index.html` — edit it if you change the firmware's routes.
 
 ### ⚠️ Important: HTTPS vs. local ESP32 (mixed content)
 

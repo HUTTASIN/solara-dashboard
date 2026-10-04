@@ -215,38 +215,39 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
 <div class="toast" id="toast"></div>
 
 <script>
-/* ---------- Device bridge: connects to a real ESP32 when configured ---------- */
-// The ESP32 firmware should expose plain JSON REST endpoints, e.g.:
-//   GET  http://<esp32-ip>/api/status     -> {battery:{pct,volt,state}, sensors:[...], state:'running'}
-//   GET  http://<esp32-ip>/api/weather    -> proxied from your weather API, or read from a local sensor
-//   POST http://<esp32-ip>/api/start      -> begins a cleaning cycle
-//   POST http://<esp32-ip>/api/stop       -> stops the motor immediately
-// Optional: a WebSocket at ws://<esp32-ip>/ws for live telemetry instead of polling.
+/* ---------- Device bridge: connects to the real ESP32 (Solasale_project.ino) ---------- */
+// Routes match Solasale_project.ino exactly:
+//   GET /run?dir=1     -> forward        GET /run?dir=-1  -> reverse
+//   GET /stop          -> stop motor     GET /speed?value=N (50-2000) -> set speed
+//   GET /status        -> {running, direction, position, speed}
 const Device = {
   ip: (()=>{ try{ return localStorage.getItem('esp32_ip') || ''; }catch(e){ return ''; } })(),
   connected: false,
   async ping(){
     if(!this.ip) return false;
-    try{
-      const res = await fetch(`http://${this.ip}/api/status`, {signal: AbortSignal.timeout(2500)});
-      this.connected = res.ok;
-    }catch(e){ this.connected = false; }
+    try{ const res = await fetch(`http://${this.ip}/status`, {signal: AbortSignal.timeout(2500)}); this.connected = res.ok; }
+    catch(e){ this.connected = false; }
     return this.connected;
   },
-  async get(path){
-    const res = await fetch(`http://${this.ip}${path}`, {signal: AbortSignal.timeout(3000)});
+  async getStatus(){
+    const res = await fetch(`http://${this.ip}/status`, {signal: AbortSignal.timeout(3000)});
     if(!res.ok) throw new Error('device error');
     return res.json();
   },
-  async post(path, body){
-    const res = await fetch(`http://${this.ip}${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+  async forward(){ return this._cmd(`/run?dir=1`); },
+  async reverse(){ return this._cmd(`/run?dir=-1`); },
+  async stop(){ return this._cmd(`/stop`); },
+  async setSpeed(v){ return this._cmd(`/speed?value=${v}`); },
+  async _cmd(path){
+    const res = await fetch(`http://${this.ip}${path}`, {signal: AbortSignal.timeout(3000)});
     if(!res.ok) throw new Error('device error');
-    return res.json();
+    return true;
   }
 };
-// NOTE: browser pages served over https (including this preview) block plain-http
-// requests to a local ESP32 (mixed-content / CSP). Host this file yourself over
-// http, or put the ESP32 behind an https reverse proxy, to actually connect.
+// NOTE: browser pages served over https (including a Cloudflare Pages deployment) block
+// plain-http requests to a local ESP32 (mixed-content). To control the real motor you
+// either open this dashboard over plain http/file:// on the same network as the ESP32,
+// or put the ESP32 behind an https tunnel (e.g. Cloudflare Tunnel) and use that hostname.
 
 /* ---------- Mock API / service layer (swap with real backend later) ---------- */
 const MockAPI = {
@@ -440,13 +441,23 @@ async function renderMonitoring(el){
     </div>
 
     <div class="card c5">
-      <h3>ควบคุมเครื่อง</h3>
-      <div class="metric-sub">สถานะ: <b style="color:var(--text)">${{running:'กำลังทำงาน',stopped:'หยุดอยู่',charging:'ชาร์จแบตเตอรี่',error:'พบข้อผิดพลาด'}[machineState]}</b></div>
-      <div class="ctrl-row">
-        <button class="btn primary" id="startBtn">▶ Start</button>
-        <button class="btn danger" id="stopBtn">■ Stop</button>
+      <h3>🎮 ควบคุมมอเตอร์ <span class="badge ${Device.ip?'b-ok':'b-warn'}" style="margin-left:4px;">${Device.ip?'เชื่อมต่อ ESP32':'โหมดจำลอง'}</span></h3>
+      <div style="display:flex;gap:10px;font-size:12.5px;color:var(--muted);margin-bottom:10px;">
+        <span>ทิศทาง: <b id="dirLabel" style="color:var(--text)">---</b></span>
+        <span>ตำแหน่ง: <b id="posLabel" style="color:var(--text)">0</b></span>
       </div>
-      <div class="hint">คำสั่งต้องได้รับการยืนยันก่อนส่งไปยังเครื่อง</div>
+      <div class="ctrl-row">
+        <button class="btn primary" id="fwdBtn">▶ เดินหน้า</button>
+        <button class="btn" id="revBtn">◀ ถอยหลัง</button>
+      </div>
+      <button class="btn danger" id="motorStopBtn" style="width:100%;margin-top:10px;">⛔ STOP</button>
+      <div style="margin-top:16px;">
+        <div class="metric-sub" style="display:flex;justify-content:space-between;">
+          <span>ความเร็ว</span><span id="speedLabel" style="font-family:var(--font-d);color:var(--text)">500 steps/sec</span>
+        </div>
+        <input id="speedSlider" type="range" min="50" max="2000" step="50" value="500" style="width:100%;margin-top:6px;">
+      </div>
+      <div class="hint">${Device.ip?'สั่งงานตรงไปยังบอร์ด ESP32 ทันที':'ยังไม่ได้เชื่อมต่อ ESP32 — ไปที่หน้าตั้งค่าเพื่อกรอก IP'}</div>
     </div>
 
     <div class="card c3" id="locationCard">
@@ -458,16 +469,38 @@ async function renderMonitoring(el){
     </div>
   </div>`;
   locateDevice();
-  document.getElementById('startBtn').onclick=()=>openModal('ยืนยันการเริ่มทำงาน','สั่งให้เครื่อง SC-04 เริ่มรอบทำความสะอาดใหม่หรือไม่?',async()=>{
-    setMachineState('running');
-    if(Device.ip){ try{ await Device.post('/api/start'); toast('✅ ส่งคำสั่ง Start ไปยัง ESP32 สำเร็จ'); return; }catch(e){ toast('⚠ เชื่อมต่อ ESP32 ไม่ได้ ใช้โหมดจำลองแทน'); } }
-    else toast('✅ ส่งคำสั่ง Start สำเร็จ (mock)');
-  });
-  document.getElementById('stopBtn').onclick=()=>openModal('ยืนยันการหยุดเครื่อง','สั่งให้เครื่อง SC-04 หยุดทำงานทันทีหรือไม่?',async()=>{
-    setMachineState('stopped');
-    if(Device.ip){ try{ await Device.post('/api/stop'); toast('🛑 ส่งคำสั่ง Stop ไปยัง ESP32 สำเร็จ'); return; }catch(e){ toast('⚠ เชื่อมต่อ ESP32 ไม่ได้ ใช้โหมดจำลองแทน'); } }
-    else toast('🛑 ส่งคำสั่ง Stop สำเร็จ (mock)');
-  });
+
+  const dirLabel=document.getElementById('dirLabel'), posLabel=document.getElementById('posLabel');
+  const speedSlider=document.getElementById('speedSlider'), speedLabel=document.getElementById('speedLabel');
+
+  async function sendMotor(action, fn, mockMsg){
+    if(Device.ip){
+      try{ await fn(); toast(`✅ ส่งคำสั่ง "${action}" ไปยัง ESP32 สำเร็จ`); }
+      catch(e){ toast('⚠ เชื่อมต่อ ESP32 ไม่ได้ — ตรวจสอบ IP ในหน้าตั้งค่า'); }
+    } else toast(mockMsg);
+  }
+  document.getElementById('fwdBtn').onclick=()=>sendMotor('เดินหน้า',()=>Device.forward(),'▶ เดินหน้า (mock)');
+  document.getElementById('revBtn').onclick=()=>sendMotor('ถอยหลัง',()=>Device.reverse(),'◀ ถอยหลัง (mock)');
+  document.getElementById('motorStopBtn').onclick=()=>sendMotor('STOP',()=>Device.stop(),'⛔ STOP (mock)');
+  speedSlider.oninput=()=>{
+    speedLabel.textContent=`${speedSlider.value} steps/sec`;
+    if(Device.ip) Device.setSpeed(speedSlider.value).catch(()=>toast('⚠ ตั้งความเร็วไม่สำเร็จ'));
+  };
+
+  // Poll real status from the ESP32 when connected, to reflect direction/position/speed live.
+  if(Device.ip){
+    const poll=async()=>{
+      try{
+        const s=await Device.getStatus();
+        dirLabel.textContent = s.direction===1?'เดินหน้า ▶':(s.direction===-1?'◀ ถอยหลัง':'---');
+        posLabel.textContent = s.position;
+        speedSlider.value = s.speed; speedLabel.textContent=`${s.speed} steps/sec`;
+        setMachineState(s.running?'running':'stopped');
+      }catch(e){ /* device offline this tick */ }
+    };
+    poll();
+    clearInterval(window._pollTimer); window._pollTimer=setInterval(poll,1000);
+  } else { clearInterval(window._pollTimer); }
 }
 
 async function renderAnalytics(el){
@@ -541,7 +574,7 @@ function renderSettings(el){
         <span class="dot-s" id="espDot" style="background:${Device.connected?'var(--ok)':'var(--muted-2)'}"></span>
         <span id="espStatusText">${Device.connected?'เชื่อมต่อสำเร็จ':'ยังไม่ได้เชื่อมต่อ · ใช้ข้อมูลจำลอง'}</span>
       </div>
-      <div class="hint">Firmware ต้องเปิด REST endpoint: <b>/api/status</b>, <b>/api/start</b>, <b>/api/stop</b> (ดูตัวอย่างใน object <b>Device</b> ในซอร์สโค้ด)<br>
+      <div class="hint">Firmware (Solasale_project.ino) เปิด endpoint: <b>/status</b>, <b>/run?dir=1|-1</b>, <b>/stop</b>, <b>/speed?value=N</b><br>
       หมายเหตุ: หน้านี้เมื่อเปิดผ่าน https จะเชื่อมต่อ ESP32 ที่เป็น http ธรรมดาในเครือข่ายท้องถิ่นไม่ได้ (ข้อจำกัด mixed-content) — ต้องรันไฟล์นี้เองในเครื่อง หรือใส่ ESP32 หลัง https proxy</div>
     </div>
     <div class="card c6"><h3>🎨 ธีม</h3>
