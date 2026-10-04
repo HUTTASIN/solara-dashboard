@@ -1,5 +1,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Preferences.h>
+#include "time.h"
 
 // =====================================================
 // ESP32 STEPPER MOTOR DASHBOARD
@@ -34,6 +36,40 @@ long position = 0;
 bool stepState = LOW;
 
 unsigned long lastStepMicros = 0;
+
+// =====================================================
+// CYCLE TRACKING (real counts, persisted across reboots)
+// =====================================================
+Preferences prefs;
+
+time_t cycleStartEpoch = 0;   // 0 = no cycle running right now
+unsigned long totalCycles = 0;
+unsigned long todayCount = 0, weekCount = 0, monthCount = 0;
+String todayKey, weekKey, monthKey;   // e.g. "2026-09-18", "2026-W38", "2026-09"
+
+String makeTodayKey(struct tm &t){ char b[11]; sprintf(b,"%04d-%02d-%02d",t.tm_year+1900,t.tm_mon+1,t.tm_mday); return String(b); }
+String makeMonthKey(struct tm &t){ char b[8];  sprintf(b,"%04d-%02d",t.tm_year+1900,t.tm_mon+1); return String(b); }
+String makeWeekKey(struct tm &t){ char b[9]; int wk=(t.tm_yday - t.tm_wday + 10)/7; sprintf(b,"%04d-W%02d",t.tm_year+1900,wk); return String(b); }
+
+// Call this whenever a new cleaning cycle starts. Rolls today/week/month
+// counters over automatically when the real calendar date has moved on,
+// and persists everything to flash so counts survive a reboot/power cut.
+void registerCycleStart(){
+    cycleStartEpoch = time(nullptr);
+    struct tm t; localtime_r(&cycleStartEpoch, &t);
+
+    String tk = makeTodayKey(t), wk = makeWeekKey(t), mk = makeMonthKey(t);
+    if (tk != todayKey) { todayKey = tk; todayCount = 0; }
+    if (wk != weekKey)  { weekKey  = wk; weekCount  = 0; }
+    if (mk != monthKey) { monthKey = mk; monthCount = 0; }
+
+    todayCount++; weekCount++; monthCount++; totalCycles++;
+
+    prefs.putString("todayKey", todayKey); prefs.putULong("todayCount", todayCount);
+    prefs.putString("weekKey",  weekKey);  prefs.putULong("weekCount",  weekCount);
+    prefs.putString("monthKey", monthKey); prefs.putULong("monthCount", monthCount);
+    prefs.putULong("totalCycles", totalCycles);
+}
 
 // =====================================================
 // DASHBOARD HTML
@@ -882,8 +918,11 @@ void handleRun() {
     }
 
 
-    // Start continuous movement
-
+    // Start continuous movement — a new "cycle" begins only when we were
+    // previously stopped (so holding/re-pressing forward doesn't double count).
+    if (!motorRunning) {
+        registerCycleStart();
+    }
     motorRunning = true;
 
 
@@ -1004,6 +1043,22 @@ void handleStatus() {
     json += "\"speed\":";
     json += speedSPS;
 
+    json += ",";
+    json += "\"cycleStartEpoch\":";
+    json += (unsigned long)cycleStartEpoch;
+
+    json += ",";
+    json += "\"cycleElapsedSec\":";
+    json += cycleStartEpoch ? (unsigned long)(time(nullptr) - cycleStartEpoch) : 0;
+
+    json += ",";
+    json += "\"todayCount\":"; json += todayCount;
+    json += ",";
+    json += "\"weekCount\":";  json += weekCount;
+    json += ",";
+    json += "\"monthCount\":"; json += monthCount;
+    json += ",";
+    json += "\"totalCycles\":"; json += totalCycles;
 
     json += "}";
 
@@ -1145,6 +1200,28 @@ void setup() {
     Serial.println("Wi-Fi connected!");
     Serial.print("Dashboard: http://");
     Serial.println(WiFi.localIP());
+
+    // Get the real date/time from the internet (needed for today/week/month
+    // cycle counts to roll over on the correct calendar day). GMT+7 = Thailand.
+    configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
+    Serial.print("Syncing time");
+    time_t now = time(nullptr);
+    unsigned long ntpStart = millis();
+    while (now < 100000 && millis() - ntpStart < 10000) { delay(300); Serial.print("."); now = time(nullptr); }
+    Serial.println();
+
+    // Reload persisted cycle counts so they survive a reboot/power cut.
+    prefs.begin("cycles", false);
+    todayKey  = prefs.getString("todayKey", "");
+    weekKey   = prefs.getString("weekKey", "");
+    monthKey  = prefs.getString("monthKey", "");
+    todayCount  = prefs.getULong("todayCount", 0);
+    weekCount   = prefs.getULong("weekCount", 0);
+    monthCount  = prefs.getULong("monthCount", 0);
+    totalCycles = prefs.getULong("totalCycles", 0);
+    // If the saved date keys don't match today's real date, the counters are
+    // stale from a previous day — registerCycleStart() will roll them over
+    // automatically the next time a cycle actually starts.
 
 
     // =================================================

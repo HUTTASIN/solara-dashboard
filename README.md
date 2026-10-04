@@ -38,6 +38,19 @@ it joins your home Wi-Fi (`true_home2G_248`) as a station and serves:
 | GET    | `/stop`              | stop immediately                       |
 | GET    | `/speed?value=N`     | set speed, 50–2000 steps/sec           |
 
+`/status` now also returns real, persisted counters: `cycleElapsedSec` (time
+since the current run started), and `todayCount` / `weekCount` / `monthCount`
+/ `totalCycles` — a "cycle" = one forward/reverse command sent while the
+motor was stopped. These are saved to flash (ESP32 `Preferences`) so they
+survive a reboot or power cut, and roll over automatically at midnight/week/
+month using the board's real clock (synced via NTP over Wi-Fi on boot).
+
+**Weather** on the Monitoring page now fetches live from [Open-Meteo](https://open-meteo.com)
+(free, no API key, CORS-enabled) using the browser's real location — this
+only works once the dashboard is actually deployed to a real domain (e.g.
+Cloudflare Pages); Claude's own in-chat preview blocks third-party fetches,
+so it'll silently show the last-known snapshot there instead.
+
 Flash it with the Arduino IDE (board: an ESP32 dev board, e.g. "ESP32 Dev
 Module"). After it connects, open the Serial Monitor at 115200 baud to read
 the IP address it was assigned — that's what you type into the dashboard's

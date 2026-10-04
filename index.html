@@ -249,6 +249,43 @@ const Device = {
 // either open this dashboard over plain http/file:// on the same network as the ESP32,
 // or put the ESP32 behind an https tunnel (e.g. Cloudflare Tunnel) and use that hostname.
 
+// Real-time weather via Open-Meteo (free, no API key, CORS-enabled — works once this
+// page is hosted on your own domain; Claude's own artifact preview blocks third-party
+// fetches, so this will only actually go live after you deploy it, e.g. to Cloudflare).
+const WMO_TH = {0:'ท้องฟ้าแจ่มใส',1:'มีเมฆบางส่วน',2:'มีเมฆเป็นส่วนมาก',3:'มีเมฆมาก',45:'มีหมอก',48:'มีหมอกน้ำแข็ง',
+  51:'ฝนละอองเล็กน้อย',53:'ฝนละออง',55:'ฝนละอองหนัก',61:'ฝนเล็กน้อย',63:'ฝนปานกลาง',65:'ฝนหนัก',
+  80:'ฝนตกเป็นช่วง',81:'ฝนตกเป็นช่วงปานกลาง',82:'ฝนตกเป็นช่วงหนัก',95:'พายุฝนฟ้าคะนอง',96:'พายุฝนฟ้าคะนองมีลูกเห็บ'};
+async function fetchLiveWeather(lat, lon){
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+    + `&current=temperature_2m,precipitation_probability,weather_code`
+    + `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max`
+    + `&timezone=auto&forecast_days=3`;
+  const res = await fetch(url, {signal: AbortSignal.timeout(6000)});
+  if(!res.ok) throw new Error('weather fetch failed');
+  const d = await res.json();
+  const days = ['อา','จ','อ','พ','พฤ','ศ','ส'];
+  return {
+    fetchedAt: new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}),
+    current: { temp: Math.round(d.current.temperature_2m*10)/10, condition: WMO_TH[d.current.weather_code] || 'ไม่ทราบสภาพอากาศ' },
+    forecast: d.daily.time.slice(0,3).map((t,i)=>({
+      day: days[new Date(t).getDay()] + (i===0?' (วันนี้)':''),
+      high: Math.round(d.daily.temperature_2m_max[i]*10)/10,
+      low: Math.round(d.daily.temperature_2m_min[i]*10)/10,
+      rain: d.daily.precipitation_probability_max[i]
+    }))
+  };
+}
+function getCoords(){
+  return new Promise(resolve=>{
+    if(!navigator.geolocation) return resolve({lat:14.0208, lon:100.6119});
+    navigator.geolocation.getCurrentPosition(
+      p=>resolve({lat:p.coords.latitude, lon:p.coords.longitude}),
+      ()=>resolve({lat:14.0208, lon:100.6119}),
+      {timeout:5000}
+    );
+  });
+}
+
 /* ---------- Mock API / service layer (swap with real backend later) ---------- */
 const MockAPI = {
   async getBattery(){ return {pct:76,volt:24.6,state:'discharging',low:false}; },
@@ -381,10 +418,23 @@ async function renderMonitoring(el){
     <div class="card c4"><h3>🌧️ สภาพอากาศ</h3><div class="skeleton" style="width:90%;height:120px;"></div></div>
     <div class="card c5"><h3>⏱️ รอบทำงานปัจจุบัน</h3><div class="skeleton" style="width:80%;height:60px;"></div></div>
   </div>`;
-  const [bat,weather,cycle,counts,sensors,state] = await Promise.all([
-    MockAPI.getBattery(),MockAPI.getWeather(),MockAPI.getCycle(),MockAPI.getCycleCounts(),MockAPI.getSensors(),MockAPI.getMachineState()
+  const [bat,mockWeather,sensors,state] = await Promise.all([
+    MockAPI.getBattery(),MockAPI.getWeather(),MockAPI.getSensors(),MockAPI.getMachineState()
   ]);
-  setMachineState(state);
+
+  // Weather: try a live fetch; silently fall back to the static snapshot if it fails
+  // (e.g. inside Claude's own preview, or if the device has no internet).
+  let weather = mockWeather, weatherIsLive = false;
+  try{ const coords = await getCoords(); weather = await fetchLiveWeather(coords.lat, coords.lon); weatherIsLive = true; }
+  catch(e){ /* keep mock snapshot */ }
+
+  // Cycle time + counts: real numbers from the ESP32 when connected, mock otherwise.
+  let cycleIsLive = false, liveStatus = null;
+  if(Device.ip){ try{ liveStatus = await Device.getStatus(); cycleIsLive = true; setMachineState(liveStatus.running?'running':'stopped'); }catch(e){} }
+  if(!cycleIsLive) setMachineState(state);
+  const fmtHMS = s=>{ s=Math.max(0,Math.floor(s)); const h=String(Math.floor(s/3600)).padStart(2,'0'), m=String(Math.floor(s%3600/60)).padStart(2,'0'), sec=String(s%60).padStart(2,'0'); return `${h}:${m}:${sec}`; };
+  const [mockCycle, mockCounts] = await Promise.all([MockAPI.getCycle(), MockAPI.getCycleCounts()]);
+
   const battColor = bat.pct<20?'var(--bad)':bat.pct<40?'var(--warn)':'var(--ok)';
   el.innerHTML = `
   <div class="grid">
@@ -397,7 +447,7 @@ async function renderMonitoring(el){
     </div>
 
     <div class="card c5">
-      <h3>🌧️ สภาพอากาศ ณ ตำแหน่งปัจจุบัน <span class="badge b-ok" style="margin-left:4px;">ข้อมูลจริง</span></h3>
+      <h3>🌧️ สภาพอากาศ ณ ตำแหน่งปัจจุบัน <span class="badge ${weatherIsLive?'b-ok':'b-warn'}" style="margin-left:4px;">${weatherIsLive?'สด · เรียลไทม์':'ออฟไลน์ (ค่าล่าสุด)'}</span></h3>
       <div style="display:flex;align-items:baseline;gap:14px;">
         <div class="metric-big">${weather.current.temp}°C</div>
         <div style="font-size:13px;color:var(--muted);">${weather.current.condition}</div>
@@ -413,26 +463,32 @@ async function renderMonitoring(el){
     </div>
 
     <div class="card c4">
-      <h3>⏱️ เวลาที่ใช้ทำความสะอาด (รอบปัจจุบัน)</h3>
+      <h3>⏱️ เวลาทำงาน (รอบปัจจุบัน) <span class="badge ${cycleIsLive?'b-ok':'b-warn'}" style="margin-left:4px;">${cycleIsLive?'ESP32 จริง':'โหมดจำลอง'}</span></h3>
+      ${cycleIsLive ? `
+      <div style="margin-top:4px;">
+        <div class="metric-sub" style="margin-bottom:6px;">เวลาที่เดินเครื่อง</div>
+        <div class="metric-big" id="elapsedDisplay" style="font-size:26px;">${liveStatus.running ? fmtHMS(liveStatus.cycleElapsedSec) : '--:--:--'}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 10px;margin-top:14px;">
+        <div><div class="metric-sub">ตำแหน่ง (step)</div><div id="posDisplay2" style="font-family:var(--font-d);font-size:19px;font-weight:600;">${liveStatus.position}</div></div>
+        <div><div class="metric-sub">ความเร็ว</div><div id="speedDisplay2" style="font-family:var(--font-d);font-size:19px;font-weight:600;">${liveStatus.speed} sps</div></div>
+      </div>` : `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 10px;">
-        <div><div class="metric-sub">เริ่มงาน</div><div style="font-family:var(--font-d);font-size:19px;font-weight:600;">${cycle.start}</div></div>
-        <div><div class="metric-sub">คาดว่าเสร็จ</div><div style="font-family:var(--font-d);font-size:19px;font-weight:600;">${cycle.eta}</div></div>
+        <div><div class="metric-sub">เริ่มงาน</div><div style="font-family:var(--font-d);font-size:19px;font-weight:600;">${mockCycle.start}</div></div>
+        <div><div class="metric-sub">คาดว่าเสร็จ</div><div style="font-family:var(--font-d);font-size:19px;font-weight:600;">${mockCycle.eta}</div></div>
       </div>
       <div style="margin-top:14px;">
         <div class="metric-sub" style="margin-bottom:6px;">เวลาที่ผ่านไป</div>
-        <div style="display:flex;align-items:baseline;gap:8px;">
-          <div class="metric-big" style="font-size:26px;">${cycle.elapsed}</div>
-          <div class="bar-track" style="flex:1;"><div class="bar-fill" style="width:44%;background:var(--accent)"></div></div>
-        </div>
+        <div class="metric-big" style="font-size:26px;">${mockCycle.elapsed}</div>
       </div>
-      <div class="metric-sub" style="margin-top:14px;">📍 พื้นที่: ${cycle.zone}</div>
+      <div class="metric-sub" style="margin-top:14px;">📍 พื้นที่: ${mockCycle.zone}</div>`}
     </div>
 
     <div class="card c3">
-      <h3>🔄 จำนวนรอบการทำงาน</h3>
-      <div class="sensor-row"><span>วันนี้</span><b>${counts.today}</b></div>
-      <div class="sensor-row"><span>สัปดาห์นี้</span><b>${counts.week}</b></div>
-      <div class="sensor-row"><span>เดือนนี้</span><b>${counts.month}</b></div>
+      <h3>🔄 จำนวนรอบ <span class="badge ${cycleIsLive?'b-ok':'b-warn'}" style="margin-left:4px;font-size:10px;">${cycleIsLive?'จริง':'จำลอง'}</span></h3>
+      <div class="sensor-row"><span>วันนี้</span><b id="todayCountEl">${cycleIsLive?liveStatus.todayCount:mockCounts.today}</b></div>
+      <div class="sensor-row"><span>สัปดาห์นี้</span><b id="weekCountEl">${cycleIsLive?liveStatus.weekCount:mockCounts.week}</b></div>
+      <div class="sensor-row"><span>เดือนนี้</span><b id="monthCountEl">${cycleIsLive?liveStatus.monthCount:mockCounts.month}</b></div>
     </div>
 
     <div class="card c4">
@@ -487,7 +543,8 @@ async function renderMonitoring(el){
     if(Device.ip) Device.setSpeed(speedSlider.value).catch(()=>toast('⚠ ตั้งความเร็วไม่สำเร็จ'));
   };
 
-  // Poll real status from the ESP32 when connected, to reflect direction/position/speed live.
+  // Poll real status from the ESP32 every second, to reflect direction/position/speed/
+  // elapsed time/counts live without needing a page reload.
   if(Device.ip){
     const poll=async()=>{
       try{
@@ -496,6 +553,12 @@ async function renderMonitoring(el){
         posLabel.textContent = s.position;
         speedSlider.value = s.speed; speedLabel.textContent=`${s.speed} steps/sec`;
         setMachineState(s.running?'running':'stopped');
+        const el=document.getElementById('elapsedDisplay'); if(el) el.textContent = s.running?fmtHMS(s.cycleElapsedSec):'--:--:--';
+        const pd=document.getElementById('posDisplay2'); if(pd) pd.textContent = s.position;
+        const sd=document.getElementById('speedDisplay2'); if(sd) sd.textContent = `${s.speed} sps`;
+        const tc=document.getElementById('todayCountEl'); if(tc) tc.textContent = s.todayCount;
+        const wc=document.getElementById('weekCountEl'); if(wc) wc.textContent = s.weekCount;
+        const mc=document.getElementById('monthCountEl'); if(mc) mc.textContent = s.monthCount;
       }catch(e){ /* device offline this tick */ }
     };
     poll();
