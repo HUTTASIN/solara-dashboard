@@ -23,9 +23,14 @@ Push this folder to a GitHub/GitLab repo, then in Cloudflare Pages choose
 
 ## Connecting the ESP32
 
-Open the deployed site → **ตั้งค่า (Settings)** → enter the ESP32's IP address →
-**ทดสอบ (Test)**. The IP is saved in the browser (localStorage) so it's
-remembered next time you open the dashboard on the same device/browser.
+`192.168.1.51` is now baked in as the default IP, so the dashboard tries to
+connect automatically on load — no manual "ทดสอบ" click needed. If the
+ESP32's IP ever changes, go to **ตั้งค่า (Settings)** and enter the new one;
+it's saved in the browser (localStorage) and remembered after that.
+
+The ESP32 no longer serves its own web dashboard — `/` just returns a short
+plain-text message confirming the API is running. All control happens from
+this Cloudflare-hosted dashboard calling the JSON routes below.
 
 `Solasale_project.ino` (included in this folder) is the matching firmware —
 it joins your home Wi-Fi (`true_home2G_248`) as a station and serves:
