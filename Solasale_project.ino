@@ -442,7 +442,7 @@ String stateName() {
 // 15. Dashboard (หน้าเว็บที่ ESP32 เสิร์ฟเอง)
 // ==================================================
 
-const char DASHBOARD[] PROGMEM = R"rawliteral(
+const char DASHBOARD[] PROGMEM = R"HTMLDASHBOARD(
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -1105,7 +1105,7 @@ if(Device.ip){
 </body>
 </html>
 
-)rawliteral";
+)HTMLDASHBOARD";
 
 // ==================================================
 // 16. Web endpoints
