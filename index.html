@@ -225,7 +225,7 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
 //   GET /speed?value=N    -> rail speed, 100-800 steps/sec
 //   GET /status           -> {cycle,message,rail,brush,pump,left,right,position,speed,running,direction,legsDone,legsTotal}
 const Device = {
-  ip: (()=>{ try{ return localStorage.getItem('esp32_ip') || window.location.host; }catch(e){ return ''; } })(),
+  ip: (()=>{ try{ return localStorage.getItem('esp32_ip') || ''; }catch(e){ return ''; } })(),
   connected: false,
   async ping(){
     if(!this.ip) return false;
