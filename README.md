@@ -64,7 +64,7 @@ Tunables near the top of the `.ino`:
 Flash it with the Arduino IDE (board: an ESP32 dev board, e.g. "ESP32 Dev
 Module"). After it connects, open the Serial Monitor at 115200 baud to read
 the IP address it was assigned — that's what you type into the dashboard's
-Settings page. The ESP32 also serves its own simple dashboard at that IP.
+Settings page. The ESP32 serves the full polished `index.html` dashboard at that IP.
 
 > **Do not publish the `.ino`.** It contains your Wi-Fi password. When deploying
 > to Cloudflare Pages upload only `index.html` and `_headers` (Option A above);
