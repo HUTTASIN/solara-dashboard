@@ -62,7 +62,7 @@ const unsigned long LIMIT_CONFIRM_MS = 20;
 // จำนวน "เที่ยว" ที่รางวิ่ง แต่ละเที่ยววิ่งจนชน Limit แล้วเด้งกลับ
 //   3 = ชนขวา -> เด้งไปชนซ้าย -> เด้งกลับมาชนขวา (ค่าเริ่มต้น)
 //   2 = ชนขวา -> เด้งไปชนซ้าย แล้วจบ (ไป-กลับ 1 รอบ)
-const uint8_t SWEEP_LEGS = 2;
+const uint8_t SWEEP_LEGS = 3;
 
 // ป้องกันกรณี Limit Switch เสีย/สายหลุด: ถ้าวิ่งเที่ยวเดียวนานเกินเวลานี้
 // จะหยุดทุกอุปกรณ์ทันที (ปรับให้มากกว่าเวลาที่รางวิ่งสุดทางจริง)
@@ -176,15 +176,18 @@ void setBrush(bool on) {
   brushOn = on;
 
   if (on) {
+    // เปิดใช้งานทั้งสองช่องของ BTS7960
     digitalWrite(R_EN_PIN, HIGH);
     digitalWrite(L_EN_PIN, HIGH);
 
-    // หมุนแปรงทิศทางเดียวด้วยความเร็วเต็ม
-    digitalWrite(LPWM_PIN, LOW);
-    digitalWrite(RPWM_PIN, HIGH);
+    // สั่ง PWM เต็มกำลังไปทางเดียว: RPWM = 100%, LPWM = 0%
+    // ใช้ analogWrite เพื่อกำหนด duty cycle ชัดเจนบน ESP32
+    analogWrite(LPWM_PIN, 0);
+    analogWrite(RPWM_PIN, 255);
   } else {
-    digitalWrite(RPWM_PIN, LOW);
-    digitalWrite(LPWM_PIN, LOW);
+    // หยุดสัญญาณขับมอเตอร์ทั้งสองด้าน
+    analogWrite(RPWM_PIN, 0);
+    analogWrite(LPWM_PIN, 0);
   }
 }
 
@@ -304,9 +307,9 @@ bool startCycle() {
 
   legsDone = 0;
 
-// ปกติวิ่งไปทางซ้ายก่อน
-// หากเริ่มต้นโดยกด Limit ซ้ายอยู่ ให้เริ่มจากถอยไปทางขวา
-  bool firstToRight = leftLimitPressed();
+  // ปกติวิ่งไปทางขวาก่อน
+  // หากเริ่มต้นโดยกด Limit ขวาอยู่ ให้เริ่มจากถอยไปทางซ้าย
+  bool firstToRight = !rightLimitPressed();
 
   if (beginLeg(firstToRight)) {
     return true;
@@ -450,63 +453,18 @@ const char DASHBOARD[] PROGMEM = R"rawliteral(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solar Cleaning Control</title>
 <style>
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: Arial, Helvetica, sans-serif;
-  background: linear-gradient(135deg, #111827, #1f2937);
-  color: white;
-  min-height: 100vh;
-}
-.container { max-width: 650px; margin: auto; padding: 20px; }
-.header { text-align: center; margin-bottom: 20px; }
-.header h1 { margin: 0; font-size: 28px; }
-.header p { color: #9ca3af; margin-top: 6px; }
-.status-card {
-  background: #111827; border: 1px solid #374151;
-  border-radius: 20px; padding: 20px; margin-bottom: 15px; text-align: center;
-}
-.status {
-  display: inline-block; padding: 8px 20px; border-radius: 30px;
-  font-size: 18px; font-weight: bold;
-}
-.status.stopped { background: #3f1d1d; color: #ff6b6b; }
-.status.run { background: #123c28; color: #4ade80; }
-.msg { color: #9ca3af; font-size: 14px; margin-top: 10px; }
-.info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
-.info {
-  background: #1f2937; border: 1px solid #374151;
-  border-radius: 16px; padding: 16px; text-align: center;
-}
-.info-title { color: #9ca3af; font-size: 13px; margin-bottom: 8px; }
-.info-value { font-size: 20px; font-weight: bold; }
-.card {
-  background: #111827; border: 1px solid #374151;
-  border-radius: 20px; padding: 20px; margin-bottom: 15px;
-}
-.card h2 { margin-top: 0; font-size: 20px; }
-.card p { color: #9ca3af; font-size: 14px; margin: 0 0 12px; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-button {
-  border: none; border-radius: 15px; min-height: 58px;
-  font-size: 16px; font-weight: bold; cursor: pointer;
-  color: white; transition: 0.15s; background: #374151;
-}
-button:active { transform: scale(0.96); }
-.start { background: linear-gradient(135deg, #16a34a, #22c55e); }
-.forward { background: linear-gradient(135deg, #16a34a, #22c55e); }
-.reverse { background: linear-gradient(135deg, #2563eb, #3b82f6); }
-.stop { background: linear-gradient(135deg, #dc2626, #ef4444); }
-.full { width: 100%; margin-top: 12px; font-size: 20px; }
-.speed-value { text-align: center; font-size: 28px; font-weight: bold; margin-bottom: 10px; }
-input[type=range] { width: 100%; height: 8px; cursor: pointer; }
-.row { display: flex; justify-content: space-between; padding: 8px 0;
-  border-bottom: 1px dashed #374151; font-size: 14px; }
-.row:last-child { border-bottom: none; }
-.row b { text-align: right; }
-small { color: #6b7280; display: block; margin-top: 10px; }
-.footer { text-align: center; color: #6b7280; font-size: 13px; margin-top: 20px; }
+:root{color-scheme:dark;--bg:#080d19;--panel:#111a2b;--panel2:#172238;--line:#293750;--muted:#91a0b8;--text:#f3f6fc;--green:#36d399;--blue:#60a5fa;--red:#fb7185;--amber:#fbbf24}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:radial-gradient(ellipse at 15% 0%,#17365b 0,transparent 38%),radial-gradient(ellipse at 100% 15%,#193c36 0,transparent 32%),var(--bg);color:var(--text);min-height:100vh}
+.container{max-width:1050px;margin:0 auto;padding:28px 20px 34px}
+.header{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:24px;padding:22px 24px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(120deg,rgba(21,35,58,.96),rgba(15,25,42,.88));box-shadow:0 18px 55px #0003}
+.header h1{margin:0;font-size:clamp(23px,4vw,32px);letter-spacing:-.7px}.header p{margin:7px 0 0;color:var(--muted);font-size:14px}.header:after{content:'SOLARA  /  ESP32';font-size:11px;font-weight:800;letter-spacing:1.5px;color:#a5f3fc;border:1px solid #28516a;background:#0d2639;border-radius:12px;padding:12px 14px;white-space:nowrap}
+.status-card,.card,.info{background:linear-gradient(145deg,rgba(20,31,51,.98),rgba(13,22,38,.98));border:1px solid var(--line);border-radius:20px;box-shadow:0 12px 32px #0002}
+.status-card{padding:24px;margin-bottom:16px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:16px}.status-card:before{content:'SYSTEM STATUS';font-size:12px;letter-spacing:1.5px;color:var(--muted);font-weight:800;order:0}.status{display:inline-flex;align-items:center;justify-content:center;padding:10px 17px;border-radius:12px;font-size:14px;font-weight:800;letter-spacing:.5px;order:1}.status.stopped{background:#3b1d2b;color:#fda4af;border:1px solid #713247}.status.run{background:#103b32;color:#6ee7b7;border:1px solid #1c6a55}.msg{color:var(--muted);font-size:13px;margin-top:0;order:2;text-align:right;flex:1}
+.info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.info{padding:20px 22px;text-align:left}.info-title{color:var(--muted);font-size:11px;letter-spacing:1.5px;font-weight:800;margin-bottom:12px}.info-value{font-size:clamp(25px,4vw,34px);font-weight:800;letter-spacing:-.7px}
+.card{padding:22px;margin-bottom:16px}.card h2{margin:0 0 8px;font-size:18px;letter-spacing:-.25px}.card p{color:var(--muted);font-size:13px;line-height:1.65;margin:0 0 16px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid3{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+button{border:1px solid #34435d;border-radius:13px;min-height:52px;padding:12px 14px;font-size:14px;font-weight:800;cursor:pointer;color:#edf4ff;transition:transform .15s,filter .15s, border-color .15s;background:linear-gradient(135deg,#25334b,#1a263b)}button:hover{filter:brightness(1.14);border-color:#607798}button:active{transform:scale(.98)}button.start,button.forward{background:linear-gradient(135deg,#087f5b,#10b981);border-color:#21b98a;color:#fff}button.reverse{background:linear-gradient(135deg,#1d4ed8,#3b82f6);border-color:#538dff;color:#fff}button.stop{background:linear-gradient(135deg,#be123c,#f43f5e);border-color:#fb7185;color:#fff}.full{width:100%;margin-top:12px;font-size:15px}.speed-value{text-align:left;font-size:28px;font-weight:800;margin:18px 0 15px}.speed-value span:last-child{color:var(--muted);font-size:13px;font-weight:600}input[type=range]{width:100%;accent-color:var(--green);cursor:pointer;height:8px}.row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid #26334a;font-size:13px}.row:last-child{border-bottom:none}.row span{color:var(--muted)}.row b{text-align:right;color:#e7eefb}.card small{color:#8292aa;display:block;margin-top:13px;font-size:11px;line-height:1.5}.footer{text-align:center;color:#6e7e97;font-size:11px;letter-spacing:1.2px;margin-top:25px;padding:18px}
+@media(max-width:600px){.container{padding:14px 12px 24px}.header{padding:18px;align-items:flex-start;flex-direction:column}.header:after{padding:8px 10px}.status-card{align-items:flex-start;flex-direction:column;gap:10px}.status-card:before{order:0}.status{order:1}.msg{order:2;text-align:left}.card{padding:17px}.info{padding:16px}.grid2{gap:9px}button{padding:10px 8px;font-size:13px;min-height:50px}}
 </style>
 </head>
 
