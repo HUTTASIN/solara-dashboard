@@ -23,43 +23,52 @@ Push this folder to a GitHub/GitLab repo, then in Cloudflare Pages choose
 
 ## Connecting the ESP32
 
-`192.168.1.51` is now baked in as the default IP, so the dashboard tries to
-connect automatically on load — no manual "ทดสอบ" click needed. If the
-ESP32's IP ever changes, go to **ตั้งค่า (Settings)** and enter the new one;
-it's saved in the browser (localStorage) and remembered after that.
+Open the deployed site → **ตั้งค่า (Settings)** → enter the ESP32's IP address →
+**ทดสอบ (Test)**. The IP is saved in the browser (localStorage) so it's
+remembered next time you open the dashboard on the same device/browser.
 
-The ESP32 no longer serves its own web dashboard — `/` just returns a short
-plain-text message confirming the API is running. All control happens from
-this Cloudflare-hosted dashboard calling the JSON routes below.
+`Solasale_project.ino` (included in this folder) is the matching firmware. It
+drives the rail stepper (A4988), brush motor (BTS7960), pump relay, two limit
+switches and the physical START/STOP buttons. It joins Wi-Fi (`ssid` / `password`
+at the top of the file) as a station and serves:
 
-`Solasale_project.ino` (included in this folder) is the matching firmware —
-it joins your home Wi-Fi (`true_home2G_248`) as a station and serves:
+| Method | Path                | Purpose                                                        |
+|--------|---------------------|----------------------------------------------------------------|
+| GET    | `/status`           | cycle, message, rail, brush, pump, limits, position, speed, legs |
+| GET    | `/start`            | START ALL — pump + brush ON, auto sweep (see below)            |
+| GET    | `/stop`             | STOP ALL — rail, brush and pump off                            |
+| GET    | `/run?dir=1\|-1`    | manual rail right / left (refused while the auto cycle runs)   |
+| GET    | `/railstop`         | stop the rail only                                             |
+| GET    | `/brush?on=1\|0`    | manual brush                                                   |
+| GET    | `/pump?on=1\|0`     | manual pump                                                    |
+| GET    | `/speed?value=N`    | rail speed, 100–800 steps/sec                                  |
 
-| Method | Path                | Purpose                              |
-|--------|---------------------|----------------------------------------|
-| GET    | `/status`           | `{running, direction, position, speed}` |
-| GET    | `/run?dir=1`         | forward                                |
-| GET    | `/run?dir=-1`        | reverse                                |
-| GET    | `/stop`              | stop immediately                       |
-| GET    | `/speed?value=N`     | set speed, 50–2000 steps/sec           |
+### What START does (web button or physical button)
 
-`/status` now also returns real, persisted counters: `cycleElapsedSec` (time
-since the current run started), and `todayCount` / `weekCount` / `monthCount`
-/ `totalCycles` — a "cycle" = one forward/reverse command sent while the
-motor was stopped. These are saved to flash (ESP32 `Preferences`) so they
-survive a reboot or power cut, and roll over automatically at midnight/week/
-month using the board's real clock (synced via NTP over Wi-Fi on boot).
+1. Pump relay and brush turn ON immediately.
+2. The rail runs until it hits a limit switch, then bounces back to the opposite
+   limit, then bounces back again. Default is 3 legs: right → left → right.
+   (If the right limit is already pressed at start, it begins by going left.)
+3. When the last leg hits its limit, rail, brush and pump all turn OFF.
 
-**Weather** on the Monitoring page now fetches live from [Open-Meteo](https://open-meteo.com)
-(free, no API key, CORS-enabled) using the browser's real location — this
-only works once the dashboard is actually deployed to a real domain (e.g.
-Cloudflare Pages); Claude's own in-chat preview blocks third-party fetches,
-so it'll silently show the last-known snapshot there instead.
+Tunables near the top of the `.ino`:
+
+- `SWEEP_LEGS` — number of legs (`2` = one round trip, `3` = default, `4` = two round trips).
+- `LEG_TIMEOUT_MS` — safety cut-off: if a leg runs this long without reaching a
+  limit (broken switch / loose wire) everything is switched off and the status
+  shows `Fault: limit not reached (timeout)`. Set it above the time the rail
+  really needs to travel end to end at your slowest speed.
+- `DIR_RIGHT_LEVEL` — flip `HIGH`/`LOW` if the rail goes the wrong way.
+- `RELAY_ACTIVE_LOW` — set `false` if your relay board is active-HIGH.
 
 Flash it with the Arduino IDE (board: an ESP32 dev board, e.g. "ESP32 Dev
 Module"). After it connects, open the Serial Monitor at 115200 baud to read
 the IP address it was assigned — that's what you type into the dashboard's
-Settings page.
+Settings page. The ESP32 also serves its own simple dashboard at that IP.
+
+> **Do not publish the `.ino`.** It contains your Wi-Fi password. When deploying
+> to Cloudflare Pages upload only `index.html` and `_headers` (Option A above);
+> with Wrangler/Git, move `Solasale_project.ino` out of the deployed folder first.
 
 This logic lives in the `Device` object near the top of the `<script>` block
 in `index.html` — edit it if you change the firmware's routes.
