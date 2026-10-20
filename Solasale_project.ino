@@ -33,9 +33,8 @@ WebServer server(80);
 #define LIMIT_LEFT_PIN  22
 #define LIMIT_RIGHT_PIN 23
 
-// Relay, LED และปุ่มกด
+// Relay และปุ่มกด
 #define RELAY_PIN        5
-#define LED_PIN          17
 #define START_BUTTON_PIN 21
 #define STOP_BUTTON_PIN  13
 
@@ -44,7 +43,7 @@ WebServer server(80);
 // ==================================================
 
 // ถ้ารีเลย์เปิดเมื่อ GPIO เป็น LOW ให้ใช้ true
-const bool RELAY_ACTIVE_LOW = true;
+const bool RELAY_ACTIVE_LOW = false;
 
 // ถ้ารางวิ่งผิดทิศ ให้เปลี่ยน HIGH เป็น LOW
 const uint8_t DIR_RIGHT_LEVEL = HIGH;
@@ -390,16 +389,6 @@ void updateManualLimits() {
     stopRail();
     cycleMessage = "Manual stopped at left limit";
   }
-}
-
-// ==================================================
-// 13. ไฟแสดงสถานะ
-// ==================================================
-
-void updateStatusLED() {
-  bool active = railMoving || brushOn || pumpOn;
-
-  digitalWrite(LED_PIN, active ? HIGH : LOW);
 }
 
 // ==================================================
@@ -790,7 +779,6 @@ void setup() {
   pinMode(LIMIT_RIGHT_PIN, INPUT_PULLUP);
 
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
 
   // เริ่มต้นโดยปิดอุปกรณ์ทั้งหมด
   digitalWrite(STEP_PIN, LOW);
@@ -805,8 +793,6 @@ void setup() {
     RELAY_PIN,
     RELAY_ACTIVE_LOW ? HIGH : LOW
   );
-
-  digitalWrite(LED_PIN, LOW);
 
   initButton(startButton);
   initButton(stopButton);
@@ -866,5 +852,4 @@ void loop() {
   updateCycle();
   updateManualLimits();
   updateStepper();
-  updateStatusLED();
 }
