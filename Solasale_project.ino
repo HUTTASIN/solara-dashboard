@@ -26,8 +26,8 @@ WebServer server(80);
 // BTS7960 : มอเตอร์แปรง
 #define RPWM_PIN 32
 #define LPWM_PIN 33
-#define R_EN_PIN 18
-#define L_EN_PIN 19
+#define R_EN_PIN 35
+#define L_EN_PIN 34
 
 // Limit Switch
 #define LIMIT_LEFT_PIN  22
