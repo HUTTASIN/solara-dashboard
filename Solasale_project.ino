@@ -54,6 +54,10 @@ const uint8_t DIR_RIGHT_LEVEL = HIGH;
 // ความเร็วราง หน่วย steps/second
 int speedSPS = 400;
 
+// Limit Switch ต้องถูกกดค้างต่อเนื่องอย่างน้อยกี่ ms ถึงจะนับว่า "ชนจริง"
+// ช่วยกัน noise จากสเต็ปเปอร์ที่ทำให้อ่านค่า Limit ผิดแล้วรางเด้งกลับก่อนถึงสุดทาง
+const unsigned long LIMIT_CONFIRM_MS = 20;
+
 // ---- ลำดับการวิ่งเมื่อกด START ----
 // จำนวน "เที่ยว" ที่รางวิ่ง แต่ละเที่ยววิ่งจนชน Limit แล้วเด้งกลับ
 //   3 = ชนขวา -> เด้งไปชนซ้าย -> เด้งกลับมาชนขวา (ค่าเริ่มต้น)
@@ -62,7 +66,7 @@ const uint8_t SWEEP_LEGS = 3;
 
 // ป้องกันกรณี Limit Switch เสีย/สายหลุด: ถ้าวิ่งเที่ยวเดียวนานเกินเวลานี้
 // จะหยุดทุกอุปกรณ์ทันที (ปรับให้มากกว่าเวลาที่รางวิ่งสุดทางจริง)
-const unsigned long LEG_TIMEOUT_MS = 1200000UL;
+const unsigned long LEG_TIMEOUT_MS = 360000UL;   // 6 นาที
 
 // ==================================================
 // 4. ตัวแปรสถานะ
@@ -92,6 +96,9 @@ unsigned long pulseHighUs = 0;
 
 uint8_t legsDone = 0;           // จำนวนเที่ยวที่ชน Limit แล้ว
 unsigned long legStartMs = 0;   // เวลาเริ่มเที่ยวปัจจุบัน
+long legStartPos = 0;           // ตำแหน่ง (steps) ตอนเริ่มเที่ยว
+long lastLegSteps = 0;          // จำนวน steps ที่เที่ยวก่อนหน้าวิ่งไปก่อนชน Limit
+unsigned long limitSinceMs = 0; // เวลาที่เริ่มเห็น Limit ถูกกด (0 = ยังไม่เห็น)
 
 String cycleMessage = "Ready";
 
@@ -263,10 +270,17 @@ bool beginLeg(bool toRight) {
 
   cycleState = toRight ? MOVING_RIGHT : MOVING_LEFT;
   legStartMs = millis();
+  legStartPos = positionSteps;
+  limitSinceMs = 0;
 
   cycleMessage = "Pass " + String(legsDone + 1) + "/" +
                  String(SWEEP_LEGS) +
                  (toRight ? ": moving right" : ": moving left");
+
+  // แสดงว่าเที่ยวก่อนหน้าวิ่งไปกี่ steps ก่อนชน Limit (ไว้ตรวจสอบหน้างาน)
+  if (legsDone > 0) {
+    cycleMessage += " (prev leg " + String(lastLegSteps) + " steps)";
+  }
 
   return true;
 }
@@ -319,11 +333,25 @@ void updateCycle() {
                               : leftLimitPressed();
 
   if (atTarget) {
+    // ต้องเห็น Limit ถูกกดค้างต่อเนื่อง LIMIT_CONFIRM_MS ก่อน
+    // ถ้าเป็นแค่สัญญาณรบกวนชั่วขณะ รางจะวิ่งต่อไป
+    if (limitSinceMs == 0) {
+      limitSinceMs = millis();
+      if (limitSinceMs == 0) limitSinceMs = 1;
+    }
+
+    if (millis() - limitSinceMs < LIMIT_CONFIRM_MS) {
+      return;
+    }
+
     stopRail();
+    lastLegSteps = labs(positionSteps - legStartPos);
+    limitSinceMs = 0;
     legsDone++;
 
     if (legsDone >= SWEEP_LEGS) {
       finishCycle();
+      cycleMessage += " (last leg " + String(lastLegSteps) + " steps)";
       return;
     }
 
@@ -333,6 +361,9 @@ void updateCycle() {
     }
     return;
   }
+
+  // Limit ไม่ถูกกดแล้ว: ล้างตัวจับเวลา
+  limitSinceMs = 0;
 
   // ป้องกัน Limit เสีย: วิ่งนานเกินกำหนดโดยไม่ชน
   if (millis() - legStartMs > LEG_TIMEOUT_MS) {
