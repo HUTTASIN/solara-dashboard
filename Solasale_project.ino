@@ -9,8 +9,8 @@
 // ==================================================
 // 1. ตั้งค่า Wi-Fi
 // ==================================================
-const char* ssid = "Kat";
-const char* password = "1234567890";
+const char* WIFI_SSID = "true_home2G_248";
+const char* WIFI_PASSWORD = "7u393g45";
 
 WebServer server(80);
 
@@ -429,120 +429,139 @@ const char DASHBOARD[] PROGMEM = R"rawliteral(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solar Cleaning Control</title>
-
 <style>
+* { box-sizing: border-box; }
 body {
-  font-family: Arial, sans-serif;
-  background: #eef2f7;
-  color: #182334;
   margin: 0;
-  padding: 16px;
+  font-family: Arial, Helvetica, sans-serif;
+  background: linear-gradient(135deg, #111827, #1f2937);
+  color: white;
+  min-height: 100vh;
 }
-.container {
-  max-width: 720px;
-  margin: auto;
+.container { max-width: 650px; margin: auto; padding: 20px; }
+.header { text-align: center; margin-bottom: 20px; }
+.header h1 { margin: 0; font-size: 28px; }
+.header p { color: #9ca3af; margin-top: 6px; }
+.status-card {
+  background: #111827; border: 1px solid #374151;
+  border-radius: 20px; padding: 20px; margin-bottom: 15px; text-align: center;
 }
-h2 { text-align: center; }
+.status {
+  display: inline-block; padding: 8px 20px; border-radius: 30px;
+  font-size: 18px; font-weight: bold;
+}
+.status.stopped { background: #3f1d1d; color: #ff6b6b; }
+.status.run { background: #123c28; color: #4ade80; }
+.msg { color: #9ca3af; font-size: 14px; margin-top: 10px; }
+.info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
+.info {
+  background: #1f2937; border: 1px solid #374151;
+  border-radius: 16px; padding: 16px; text-align: center;
+}
+.info-title { color: #9ca3af; font-size: 13px; margin-bottom: 8px; }
+.info-value { font-size: 20px; font-weight: bold; }
 .card {
-  background: white;
-  border-radius: 14px;
-  padding: 16px;
-  margin: 12px 0;
-  box-shadow: 0 2px 8px #0001;
+  background: #111827; border: 1px solid #374151;
+  border-radius: 20px; padding: 20px; margin-bottom: 15px;
 }
+.card h2 { margin-top: 0; font-size: 20px; }
+.card p { color: #9ca3af; font-size: 14px; margin: 0 0 12px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
 button {
-  border: 0;
-  border-radius: 9px;
-  padding: 13px 12px;
-  margin: 4px;
-  font-size: 15px;
-  font-weight: bold;
-  cursor: pointer;
+  border: none; border-radius: 15px; min-height: 58px;
+  font-size: 16px; font-weight: bold; cursor: pointer;
+  color: white; transition: 0.15s; background: #374151;
 }
-.start { background: #198754; color: white; }
-.stop { background: #dc3545; color: white; }
-.control { background: #dbeafe; color: #12345a; }
-button:active { opacity: .7; }
-.grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-.full { width: 100%; }
-.value { font-weight: bold; }
-small { color: #667085; }
+button:active { transform: scale(0.96); }
+.start { background: linear-gradient(135deg, #16a34a, #22c55e); }
+.forward { background: linear-gradient(135deg, #16a34a, #22c55e); }
+.reverse { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+.stop { background: linear-gradient(135deg, #dc2626, #ef4444); }
+.full { width: 100%; margin-top: 12px; font-size: 20px; }
+.speed-value { text-align: center; font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+input[type=range] { width: 100%; height: 8px; cursor: pointer; }
+.row { display: flex; justify-content: space-between; padding: 8px 0;
+  border-bottom: 1px dashed #374151; font-size: 14px; }
+.row:last-child { border-bottom: none; }
+.row b { text-align: right; }
+small { color: #6b7280; display: block; margin-top: 10px; }
+.footer { text-align: center; color: #6b7280; font-size: 13px; margin-top: 20px; }
 </style>
 </head>
 
 <body>
 <div class="container">
-  <h2>Solar Panel Cleaning</h2>
 
-  <div class="card">
-    <h3>Automatic Control</h3>
-    <p>กด START: ปั๊ม + แปรงทำงาน รางวิ่งชน Limit แล้วเด้งกลับไปชนอีกฝั่ง และเด้งกลับ</p>
-    <button class="start full" onclick="cmd('/start')">
-      START ALL
-    </button>
-    <button class="stop full" onclick="cmd('/stop')">
-      STOP ALL
-    </button>
-    <small>
-      STOP ALL เป็นคำสั่งผ่านซอฟต์แวร์ ไม่ใช่วงจร
-      หยุดฉุกเฉินแบบตัดกำลัง
-    </small>
+  <div class="header">
+    <h1>☀️ Solar Panel Cleaning</h1>
+    <p>ESP32 Web Control Dashboard</p>
   </div>
 
-  <div class="card">
-    <h3>Manual Control</h3>
-    <div class="grid">
-      <button class="control" onclick="cmd('/run?dir=1')">
-        Rail Right
-      </button>
-      <button class="control" onclick="cmd('/run?dir=-1')">
-        Rail Left
-      </button>
-      <button class="control" onclick="cmd('/railstop')">
-        Rail Stop
-      </button>
-      <button class="control" onclick="cmd('/brush?on=1')">
-        Brush ON
-      </button>
-      <button class="control" onclick="cmd('/brush?on=0')">
-        Brush OFF
-      </button>
-      <button class="control" onclick="cmd('/pump?on=1')">
-        Pump ON
-      </button>
-      <button class="control" onclick="cmd('/pump?on=0')">
-        Pump OFF
-      </button>
+  <div class="status-card">
+    <div id="status" class="status stopped">🔴 STOPPED</div>
+    <div class="msg" id="message">--</div>
+  </div>
+
+  <div class="info-grid">
+    <div class="info">
+      <div class="info-title">RAIL</div>
+      <div id="rail" class="info-value">---</div>
+    </div>
+    <div class="info">
+      <div class="info-title">POSITION (steps)</div>
+      <div id="pos" class="info-value">0</div>
     </div>
   </div>
 
   <div class="card">
-    <h3>Rail Speed</h3>
-    <label>Steps/second: <span id="speedVal">400</span></label>
-    <input type="range" min="100" max="800" value="400"
-      id="speed" class="full"
+    <h2>🤖 Automatic Control</h2>
+    <p>กด START: ปั๊ม + แปรงทำงาน รางวิ่งชน Limit แล้วเด้งกลับไปชนอีกฝั่ง และเด้งกลับ</p>
+    <div class="grid2">
+      <button class="start" onclick="cmd('/start')">▶ START ALL</button>
+      <button class="stop" onclick="cmd('/stop')">⛔ STOP ALL</button>
+    </div>
+    <small>STOP ALL เป็นคำสั่งผ่านซอฟต์แวร์ ไม่ใช่วงจรหยุดฉุกเฉินแบบตัดกำลัง</small>
+  </div>
+
+  <div class="card">
+    <h2>🎮 Manual Control</h2>
+    <div class="grid2">
+      <button class="reverse" onclick="cmd('/run?dir=-1')">◀ Rail Left</button>
+      <button class="forward" onclick="cmd('/run?dir=1')">Rail Right ▶</button>
+    </div>
+    <button class="stop full" onclick="cmd('/railstop')">■ Rail Stop</button>
+    <div class="grid3">
+      <button onclick="cmd('/brush?on=1')">Brush ON</button>
+      <button onclick="cmd('/brush?on=0')">Brush OFF</button>
+      <span></span>
+      <button onclick="cmd('/pump?on=1')">Pump ON</button>
+      <button onclick="cmd('/pump?on=0')">Pump OFF</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>⚡ Rail Speed</h2>
+    <div class="speed-value">
+      <span id="speedVal">400</span>
+      <span style="font-size:15px;">steps/sec</span>
+    </div>
+    <input type="range" min="100" max="800" step="50" value="400" id="speed"
       oninput="speedVal.textContent=this.value"
       onchange="cmd('/speed?value='+this.value)">
   </div>
 
   <div class="card">
-    <h3>System Status</h3>
-    <p>Cycle: <span class="value" id="cycle">--</span></p>
-    <p>Message: <span class="value" id="message">--</span></p>
-    <p>Rail: <span class="value" id="rail">--</span></p>
-    <p>Brush: <span class="value" id="brush">--</span></p>
-    <p>Pump: <span class="value" id="pump">--</span></p>
-    <p>Left Limit: <span class="value" id="left">--</span></p>
-    <p>Right Limit: <span class="value" id="right">--</span></p>
-    <p>Position estimate: <span class="value" id="pos">--</span> steps</p>
-    <button class="control full" onclick="refreshStatus()">
-      Refresh Status
-    </button>
+    <h2>📊 System Status</h2>
+    <div class="row"><span>Cycle</span><b id="cycle">--</b></div>
+    <div class="row"><span>Passes done</span><b id="legs">--</b></div>
+    <div class="row"><span>Brush</span><b id="brush">--</b></div>
+    <div class="row"><span>Pump</span><b id="pump">--</b></div>
+    <div class="row"><span>Left Limit</span><b id="left">--</b></div>
+    <div class="row"><span>Right Limit</span><b id="right">--</b></div>
   </div>
+
+  <div class="footer">SOLARA · ESP32 Solar Panel Cleaner</div>
 </div>
 
 <script>
@@ -550,31 +569,37 @@ async function cmd(path) {
   try {
     const r = await fetch(path);
     const t = await r.text();
-    console.log(t);
+    if (!r.ok) alert(t);
     await refreshStatus();
   } catch(e) {
     alert('เชื่อมต่อ ESP32 ไม่ได้');
   }
 }
 
+const $ = id => document.getElementById(id);
+
 async function refreshStatus() {
   try {
     const r = await fetch('/status');
     const s = await r.json();
 
-    document.getElementById('cycle').textContent = s.cycle;
-    document.getElementById('message').textContent = s.message;
-    document.getElementById('rail').textContent = s.rail;
-    document.getElementById('brush').textContent = s.brush;
-    document.getElementById('pump').textContent = s.pump;
-    document.getElementById('left').textContent = s.left;
-    document.getElementById('right').textContent = s.right;
-    document.getElementById('pos').textContent = s.position;
-    document.getElementById('speedVal').textContent = s.speed;
-    document.getElementById('speed').value = s.speed;
+    const st = $('status');
+    if (s.running) { st.textContent = '🟢 RUNNING'; st.className = 'status run'; }
+    else           { st.textContent = '🔴 STOPPED'; st.className = 'status stopped'; }
+
+    $('message').textContent = s.message;
+    $('rail').textContent  = s.rail;
+    $('pos').textContent   = s.position;
+    $('cycle').textContent = s.cycle;
+    $('legs').textContent  = s.legsDone + ' / ' + s.legsTotal;
+    $('brush').textContent = s.brush;
+    $('pump').textContent  = s.pump;
+    $('left').textContent  = s.left;
+    $('right').textContent = s.right;
+    $('speedVal').textContent = s.speed;
+    $('speed').value = s.speed;
   } catch(e) {
-    document.getElementById('message').textContent =
-      'Connection lost';
+    $('message').textContent = 'Connection lost';
   }
 }
 
@@ -790,9 +815,14 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  Serial.print("Connecting to Wi-Fi");
+  Serial.println();
+  Serial.println("================================");
+  Serial.println(" SOLARA CLEANING DASHBOARD");
+  Serial.println("================================");
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(WIFI_SSID);
 
   unsigned long wifiStart = millis();
 

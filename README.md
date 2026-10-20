@@ -29,8 +29,8 @@ remembered next time you open the dashboard on the same device/browser.
 
 `Solasale_project.ino` (included in this folder) is the matching firmware. It
 drives the rail stepper (A4988), brush motor (BTS7960), pump relay, two limit
-switches and the physical START/STOP buttons. It joins Wi-Fi (`ssid` / `password`
-at the top of the file) as a station and serves:
+switches and the physical START/STOP buttons. It joins Wi-Fi (`WIFI_SSID` / `WIFI_PASSWORD` at the top of
+the file, unchanged from the original firmware) as a station and serves:
 
 | Method | Path                | Purpose                                                        |
 |--------|---------------------|----------------------------------------------------------------|
