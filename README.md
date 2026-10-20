@@ -2,7 +2,7 @@
 
 Static, single-file dashboard (`index.html`). No build step, no dependencies to install.
 
-## Deploy to ESP32 Dashboard
+## Deploy to Cloudflare Pages
 
 **Option A — Dashboard (easiest)**
 1. Go to the Cloudflare dashboard → **Workers & Pages** → **Create** → **Pages** → **Upload assets**.
@@ -17,7 +17,7 @@ wrangler pages deploy . --project-name=solara-dashboard
 Run this from inside this folder.
 
 **Option C — Git**
-Push this folder to a GitHub/GitLab repo, then in ESP32 Dashboard choose
+Push this folder to a GitHub/GitLab repo, then in Cloudflare Pages choose
 **Connect to Git**, pick the repo, and leave the build command empty
 (output directory = `/`).
 
@@ -30,7 +30,7 @@ remembered next time you open the dashboard on the same device/browser.
 `Solasale_project.ino` (included in this folder) is the matching firmware. It
 drives the rail stepper (A4988), brush motor (BTS7960), pump relay, two limit
 switches and the physical START/STOP buttons. It joins Wi-Fi (`WIFI_SSID` / `WIFI_PASSWORD` at the top of
-the file, set to SSID `Kat` and password `1234567890`) as a station and serves:
+the file, unchanged from the original firmware) as a station and serves:
 
 | Method | Path                | Purpose                                                        |
 |--------|---------------------|----------------------------------------------------------------|
@@ -67,7 +67,7 @@ the IP address it was assigned — that's what you type into the dashboard's
 Settings page. The ESP32 also serves its own simple dashboard at that IP.
 
 > **Do not publish the `.ino`.** It contains your Wi-Fi password. When deploying
-> to ESP32 Dashboard upload only `index.html` and `_headers` (Option A above);
+> to Cloudflare Pages upload only `index.html` and `_headers` (Option A above);
 > with Wrangler/Git, move `Solasale_project.ino` out of the deployed folder first.
 
 This logic lives in the `Device` object near the top of the `<script>` block
@@ -75,7 +75,7 @@ in `index.html` — edit it if you change the firmware's routes.
 
 ### ⚠️ Important: HTTPS vs. local ESP32 (mixed content)
 
-ESP32 Dashboard serves everything over **https**. Browsers block a page
+Cloudflare Pages serves everything over **https**. Browsers block a page
 loaded over https from calling plain **http** devices on your local network
 (this is the browser's own "mixed content" security rule — it has nothing to
 do with Cloudflare or this code). Because of that, the deployed dashboard
@@ -96,8 +96,3 @@ Pick one of these to actually close the loop:
 Until one of these is in place, the dashboard will show **mock data** for
 battery/sensors/history, since the ESP32 calls will fail and it falls back
 automatically.
-
-
-## Firmware version with embedded dashboard
-
-The modified `Solasale_project.ino` serves the full `index.html` interface directly from the ESP32 at `http://<ESP32-IP>/`. It connects to Wi-Fi SSID `Kat` with password `1234567890`. Open Serial Monitor at 115200 baud to find the assigned IP address. The HTML defaults its device connection to the same host, so the dashboard does not need a separate IP configuration.

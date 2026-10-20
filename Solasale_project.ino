@@ -9,8 +9,8 @@
 // ==================================================
 // 1. ตั้งค่า Wi-Fi
 // ==================================================
-const char* WIFI_SSID = "Kat";
-const char* WIFI_PASSWORD = "1234567890";
+const char* WIFI_SSID = "true_home2G_248";
+const char* WIFI_PASSWORD = "7u393g45";
 
 WebServer server(80);
 
@@ -62,7 +62,7 @@ const unsigned long LIMIT_CONFIRM_MS = 20;
 // จำนวน "เที่ยว" ที่รางวิ่ง แต่ละเที่ยววิ่งจนชน Limit แล้วเด้งกลับ
 //   3 = ชนขวา -> เด้งไปชนซ้าย -> เด้งกลับมาชนขวา (ค่าเริ่มต้น)
 //   2 = ชนขวา -> เด้งไปชนซ้าย แล้วจบ (ไป-กลับ 1 รอบ)
-const uint8_t SWEEP_LEGS = 3;
+const uint8_t SWEEP_LEGS = 2;
 
 // ป้องกันกรณี Limit Switch เสีย/สายหลุด: ถ้าวิ่งเที่ยวเดียวนานเกินเวลานี้
 // จะหยุดทุกอุปกรณ์ทันที (ปรับให้มากกว่าเวลาที่รางวิ่งสุดทางจริง)
@@ -304,9 +304,9 @@ bool startCycle() {
 
   legsDone = 0;
 
-  // ปกติวิ่งไปทางขวาก่อน
-  // หากเริ่มต้นโดยกด Limit ขวาอยู่ ให้เริ่มจากถอยไปทางซ้าย
-  bool firstToRight = !rightLimitPressed();
+// ปกติวิ่งไปทางซ้ายก่อน
+// หากเริ่มต้นโดยกด Limit ซ้ายอยู่ ให้เริ่มจากถอยไปทางขวา
+  bool firstToRight = leftLimitPressed();
 
   if (beginLeg(firstToRight)) {
     return true;
@@ -442,22 +442,193 @@ String stateName() {
 // 15. Dashboard (หน้าเว็บที่ ESP32 เสิร์ฟเอง)
 // ==================================================
 
-const char DASHBOARD[] PROGMEM =
-  "<!doctype html>\n"
-  "<html lang=\"th\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>SOLARA Dashboard</title>\n"
-  "<style>\n"
-  ":root{color-scheme:dark;--bg:#08111f;--panel:#111e30;--line:#263950;--text:#eaf2ff;--muted:#93a7c2;--green:#2de0a3;--blue:#65a8ff;--red:#ff647c;--gold:#ffc86b}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 10% 0%,#153454 0,transparent 45%),var(--bg);font:15px system-ui,'Segoe UI',sans-serif;color:var(--text);min-height:100vh}.wrap{max-width:1000px;margin:auto;padding:24px}.head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:12px}.logo{width:48px;height:48px;border-radius:15px;background:linear-gradient(135deg,#2de0a3,#258bff);display:grid;place-items:center;color:#071422;font-size:25px;font-weight:900}.eyebrow{font-size:11px;letter-spacing:2px;color:var(--green);font-weight:800}.title{font-size:25px;font-weight:800;letter-spacing:.5px}.pill{border:1px solid var(--line);background:#102137;padding:9px 13px;border-radius:30px;color:var(--muted);font-size:12px}.led{display:inline-block;width:8px;height:8px;background:var(--gold);border-radius:50%;margin-right:7px}.hero{padding:24px;border:1px solid #29415b;border-radius:22px;background:linear-gradient(120deg,#132b42,#101b2c);display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:16px}.hero h1{font-size:clamp(24px,4vw,36px);margin:7px 0}.hero p{color:var(--muted);margin:0}.hero-icon{font-size:54px;filter:drop-shadow(0 0 20px #2de0a344)}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{background:#101d2e;border:1px solid var(--line);border-radius:18px;padding:19px;min-width:0}.label{font-size:12px;color:var(--muted);margin-bottom:9px}.value{font-size:24px;font-weight:800;overflow-wrap:anywhere}.sub{font-size:12px;color:var(--muted);margin-top:7px}.section{font-size:14px;font-weight:800;margin:22px 0 12px}.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.btn{border:1px solid #304760;border-radius:12px;background:#1a2d43;color:var(--text);padding:13px 12px;font-size:14px;font-weight:750;cursor:pointer;transition:.15s}.btn:hover{filter:brightness(1.15);transform:translateY(-1px)}.green{background:linear-gradient(135deg,#2de0a3,#13a97d);color:#061a19;border:0}.blue{background:linear-gradient(135deg,#65a8ff,#477de5);color:#071629;border:0}.red{background:#3a1c2a;color:#ff8a9b;border-color:#693044}.wide{grid-column:1/-1}.range{width:100%;accent-color:var(--green);margin-top:14px}.row{display:flex;justify-content:space-between;align-items:center;gap:12px}.tag{padding:5px 9px;border-radius:8px;background:#19382f;color:var(--green);font-size:11px;font-weight:800}.tag.warn{background:#3b2d1a;color:var(--gold)}.tag.off{background:#273345;color:#aebdd0}.footer{color:#71849c;text-align:center;font-size:11px;padding:25px 0 8px}#notice{font-size:12px;color:var(--muted);min-height:20px;margin-top:12px}@media(max-width:700px){.wrap{padding:15px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{padding:18px}.hero-icon{font-size:40px}.title{font-size:21px}.card{padding:15px}}@media(max-width:430px){.grid{grid-template-columns:1fr 1fr}.value{font-size:20px}.pill{font-size:10px}.controls .btn{padding:12px 8px}}\n"
-  "</style></head><body><main class=\"wrap\">\n"
-  "<header class=\"head\"><div class=\"brand\"><div class=\"logo\">S</div><div><div class=\"eyebrow\">SMART SOLAR CARE</div><div class=\"title\">SOLARA <span style=\"color:#65a8ff\">CONTROL</span></div></div></div><div class=\"pill\"><span class=\"led\" id=\"led\"></span><span id=\"connection\">กำลังเชื่อมต่อ</span></div></header>\n"
-  "<section class=\"hero\"><div><div class=\"eyebrow\">CLEANING SYSTEM / LIVE PANEL</div><h1>Solar Panel Cleaning</h1><p>แดชบอร์ดควบคุมระบบทำความสะอาดแผงโซลาร์เซลล์</p></div><div class=\"hero-icon\">☀️</div></section>\n"
-  "<div class=\"grid\"><section class=\"card\"><div class=\"label\">สถานะระบบ</div><div class=\"value\" id=\"cycle\">--</div><div class=\"sub\" id=\"message\">กำลังอ่านสถานะ...</div></section><section class=\"card\"><div class=\"label\">รางเลื่อน</div><div class=\"value\" id=\"rail\">--</div><div class=\"sub\">ตำแหน่ง <span id=\"position\">0</span> steps</div></section><section class=\"card\"><div class=\"label\">ความเร็วราง</div><div class=\"value\"><span id=\"speedVal\">400</span><small style=\"font-size:12px;color:#93a7c2\"> steps/s</small></div><input id=\"speed\" class=\"range\" type=\"range\" min=\"100\" max=\"800\" step=\"50\" value=\"400\" oninput=\"speedVal.textContent=this.value\" onchange=\"send('/speed?value='+this.value)\"><div class=\"sub\">ปรับความเร็ว 100–800</div></section><section class=\"card\"><div class=\"row\"><div class=\"label\">มอเตอร์แปรง</div><span class=\"tag off\" id=\"brushTag\">OFF</span></div><div class=\"value\" id=\"brush\">ปิด</div><div class=\"sub\">BTS7960</div></section><section class=\"card\"><div class=\"row\"><div class=\"label\">ปั๊มน้ำ</div><span class=\"tag off\" id=\"pumpTag\">OFF</span></div><div class=\"value\" id=\"pump\">ปิด</div><div class=\"sub\">Relay output</div></section><section class=\"card\"><div class=\"label\">Limit Switch</div><div class=\"row\"><span>ซ้าย <b id=\"left\">--</b></span><span>ขวา <b id=\"right\">--</b></span></div><div class=\"sub\">สถานะสวิตช์ปลายราง</div></section></div>\n"
-  "<div class=\"section\">การควบคุมระบบ</div><section class=\"card\"><div class=\"controls\"><button class=\"btn green\" onclick=\"send('/start')\">▶ เริ่มอัตโนมัติ</button><button class=\"btn red\" onclick=\"send('/stop')\">■ หยุดทั้งหมด</button><button class=\"btn blue\" onclick=\"send('/run?dir=1')\">→ เลื่อนรางขวา</button><button class=\"btn blue\" onclick=\"send('/run?dir=-1')\">← เลื่อนรางซ้าย</button><button class=\"btn\" onclick=\"send('/railstop')\">หยุดราง</button><button class=\"btn\" onclick=\"toggle('/brush?on=','brush')\">เปิด/ปิดแปรง</button><button class=\"btn wide\" onclick=\"toggle('/pump?on=','pump')\">เปิด/ปิดปั๊มน้ำ</button></div><div id=\"notice\">พร้อมใช้งานเมื่อเชื่อมต่อ ESP32</div></section>\n"
-  "<div class=\"footer\">SOLARA · ESP32 LOCAL DASHBOARD · STATUS REFRESH EVERY 1.5s</div></main>\n"
-  "<script>\n"
-  "async function send(path){const n=document.getElementById('notice');try{const r=await fetch(path,{cache:'no-store'});const t=await r.text();n.textContent=r.ok?'✓ '+t:'⚠ '+t;if(!r.ok)n.style.color='#ff8a9b';else n.style.color='#2de0a3';await refresh()}catch(e){n.textContent='เชื่อมต่อ ESP32 ไม่สำเร็จ';n.style.color='#ff8a9b'}}\n"
-  "async function toggle(path,key){const on=document.getElementById(key).textContent==='ปิด'?1:0;await send(path+on)}\n"
-  "async function refresh(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw 0;const d=await r.json();document.getElementById('connection').textContent='ESP32 Online';document.getElementById('led').style.background='#2de0a3';document.getElementById('cycle').textContent=d.cycle||'--';document.getElementById('message').textContent=d.message||'';document.getElementById('rail').textContent=d.rail==='STOPPED'?'หยุด':d.rail==='RIGHT'?'กำลังไปขวา':'กำลังไปซ้าย';document.getElementById('position').textContent=d.position??0;document.getElementById('speedVal').textContent=d.speed??400;document.getElementById('speed').value=d.speed??400;document.getElementById('brush').textContent=d.brush==='ON'?'เปิด':'ปิด';document.getElementById('pump').textContent=d.pump==='ON'?'เปิด':'ปิด';document.getElementById('brushTag').textContent=d.brush||'OFF';document.getElementById('pumpTag').textContent=d.pump||'OFF';document.getElementById('brushTag').className='tag '+(d.brush==='ON'?'':'off');document.getElementById('pumpTag').className='tag '+(d.pump==='ON'?'':'off');document.getElementById('left').textContent=d.left==='PRESSED'?'กดอยู่':'ปกติ';document.getElementById('right').textContent=d.right==='PRESSED'?'กดอยู่':'ปกติ'}catch(e){document.getElementById('connection').textContent='ESP32 Offline';document.getElementById('led').style.background='#ff647c'}}refresh();setInterval(refresh,1500);\n"
-  "</script></body></html>\n";
+const char DASHBOARD[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Cleaning Control</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: linear-gradient(135deg, #111827, #1f2937);
+  color: white;
+  min-height: 100vh;
+}
+.container { max-width: 650px; margin: auto; padding: 20px; }
+.header { text-align: center; margin-bottom: 20px; }
+.header h1 { margin: 0; font-size: 28px; }
+.header p { color: #9ca3af; margin-top: 6px; }
+.status-card {
+  background: #111827; border: 1px solid #374151;
+  border-radius: 20px; padding: 20px; margin-bottom: 15px; text-align: center;
+}
+.status {
+  display: inline-block; padding: 8px 20px; border-radius: 30px;
+  font-size: 18px; font-weight: bold;
+}
+.status.stopped { background: #3f1d1d; color: #ff6b6b; }
+.status.run { background: #123c28; color: #4ade80; }
+.msg { color: #9ca3af; font-size: 14px; margin-top: 10px; }
+.info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px; }
+.info {
+  background: #1f2937; border: 1px solid #374151;
+  border-radius: 16px; padding: 16px; text-align: center;
+}
+.info-title { color: #9ca3af; font-size: 13px; margin-bottom: 8px; }
+.info-value { font-size: 20px; font-weight: bold; }
+.card {
+  background: #111827; border: 1px solid #374151;
+  border-radius: 20px; padding: 20px; margin-bottom: 15px;
+}
+.card h2 { margin-top: 0; font-size: 20px; }
+.card p { color: #9ca3af; font-size: 14px; margin: 0 0 12px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+button {
+  border: none; border-radius: 15px; min-height: 58px;
+  font-size: 16px; font-weight: bold; cursor: pointer;
+  color: white; transition: 0.15s; background: #374151;
+}
+button:active { transform: scale(0.96); }
+.start { background: linear-gradient(135deg, #16a34a, #22c55e); }
+.forward { background: linear-gradient(135deg, #16a34a, #22c55e); }
+.reverse { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+.stop { background: linear-gradient(135deg, #dc2626, #ef4444); }
+.full { width: 100%; margin-top: 12px; font-size: 20px; }
+.speed-value { text-align: center; font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+input[type=range] { width: 100%; height: 8px; cursor: pointer; }
+.row { display: flex; justify-content: space-between; padding: 8px 0;
+  border-bottom: 1px dashed #374151; font-size: 14px; }
+.row:last-child { border-bottom: none; }
+.row b { text-align: right; }
+small { color: #6b7280; display: block; margin-top: 10px; }
+.footer { text-align: center; color: #6b7280; font-size: 13px; margin-top: 20px; }
+</style>
+</head>
+
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>☀️ Solar Panel Cleaning</h1>
+    <p>ESP32 Web Control Dashboard</p>
+  </div>
+
+  <div class="status-card">
+    <div id="status" class="status stopped">🔴 STOPPED</div>
+    <div class="msg" id="message">--</div>
+  </div>
+
+  <div class="info-grid">
+    <div class="info">
+      <div class="info-title">RAIL</div>
+      <div id="rail" class="info-value">---</div>
+    </div>
+    <div class="info">
+      <div class="info-title">POSITION (steps)</div>
+      <div id="pos" class="info-value">0</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🤖 Automatic Control</h2>
+    <p>กด START: ปั๊ม + แปรงทำงาน รางวิ่งชน Limit แล้วเด้งกลับไปชนอีกฝั่ง และเด้งกลับ</p>
+    <div class="grid2">
+      <button class="start" onclick="cmd('/start')">▶ START ALL</button>
+      <button class="stop" onclick="cmd('/stop')">⛔ STOP ALL</button>
+    </div>
+    <small>STOP ALL เป็นคำสั่งผ่านซอฟต์แวร์ ไม่ใช่วงจรหยุดฉุกเฉินแบบตัดกำลัง</small>
+  </div>
+
+  <div class="card">
+    <h2>🎮 Manual Control</h2>
+    <div class="grid2">
+      <button class="reverse" onclick="cmd('/run?dir=-1')">◀ Rail Left</button>
+      <button class="forward" onclick="cmd('/run?dir=1')">Rail Right ▶</button>
+    </div>
+    <button class="stop full" onclick="cmd('/railstop')">■ Rail Stop</button>
+    <div class="grid3">
+      <button onclick="cmd('/brush?on=1')">Brush ON</button>
+      <button onclick="cmd('/brush?on=0')">Brush OFF</button>
+      <span></span>
+      <button onclick="cmd('/pump?on=1')">Pump ON</button>
+      <button onclick="cmd('/pump?on=0')">Pump OFF</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>⚡ Rail Speed</h2>
+    <div class="speed-value">
+      <span id="speedVal">400</span>
+      <span style="font-size:15px;">steps/sec</span>
+    </div>
+    <input type="range" min="100" max="800" step="50" value="400" id="speed"
+      oninput="speedVal.textContent=this.value"
+      onchange="cmd('/speed?value='+this.value)">
+  </div>
+
+  <div class="card">
+    <h2>📊 System Status</h2>
+    <div class="row"><span>Cycle</span><b id="cycle">--</b></div>
+    <div class="row"><span>Passes done</span><b id="legs">--</b></div>
+    <div class="row"><span>Brush</span><b id="brush">--</b></div>
+    <div class="row"><span>Pump</span><b id="pump">--</b></div>
+    <div class="row"><span>Left Limit</span><b id="left">--</b></div>
+    <div class="row"><span>Right Limit</span><b id="right">--</b></div>
+  </div>
+
+  <div class="footer">SOLARA · ESP32 Solar Panel Cleaner</div>
+</div>
+
+<script>
+async function cmd(path) {
+  try {
+    const r = await fetch(path);
+    const t = await r.text();
+    if (!r.ok) alert(t);
+    await refreshStatus();
+  } catch(e) {
+    alert('เชื่อมต่อ ESP32 ไม่ได้');
+  }
+}
+
+const $ = id => document.getElementById(id);
+
+async function refreshStatus() {
+  try {
+    const r = await fetch('/status');
+    const s = await r.json();
+
+    const st = $('status');
+    if (s.running) { st.textContent = '🟢 RUNNING'; st.className = 'status run'; }
+    else           { st.textContent = '🔴 STOPPED'; st.className = 'status stopped'; }
+
+    $('message').textContent = s.message;
+    $('rail').textContent  = s.rail;
+    $('pos').textContent   = s.position;
+    $('cycle').textContent = s.cycle;
+    $('legs').textContent  = s.legsDone + ' / ' + s.legsTotal;
+    $('brush').textContent = s.brush;
+    $('pump').textContent  = s.pump;
+    $('left').textContent  = s.left;
+    $('right').textContent = s.right;
+    $('speedVal').textContent = s.speed;
+    $('speed').value = s.speed;
+  } catch(e) {
+    $('message').textContent = 'Connection lost';
+  }
+}
+
+setInterval(refreshStatus, 1000);
+refreshStatus();
+</script>
+</body>
+</html>
+)rawliteral";
 
 // ==================================================
 // 16. Web endpoints
