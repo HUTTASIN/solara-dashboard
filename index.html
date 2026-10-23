@@ -169,6 +169,21 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
 .overlay.show{display:flex;}
 .modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:22px;width:320px;}
 .modal h4{margin:0 0 8px;} .modal p{color:var(--muted);font-size:13px;margin:0 0 18px;}
+.sch-slot{background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0;}
+.sch-slot.off{opacity:.6;}
+.sch-top{display:flex;align-items:center;gap:10px;font-weight:600;font-size:13px;}
+.sch-top input[type=time]{flex:1;min-width:0;background:var(--panel);border:1px solid var(--border);color:var(--text);padding:7px 9px;border-radius:7px;font-family:var(--font-d);font-size:14px;}
+.sch-top input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);}
+.sch-days{display:flex;gap:5px;}
+.sch-chip{flex:1 1 0;min-width:0;}
+.sch-chip input{display:none;}
+.sch-chip span{display:block;text-align:center;padding:7px 0;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12.5px;cursor:pointer;user-select:none;}
+.sch-chip input:checked+span{background:linear-gradient(145deg,var(--accent),var(--accent-2));color:var(--accent-ink);border-color:transparent;font-weight:700;}
+.sch-presets{display:flex;gap:6px;}
+.sch-presets button{flex:1;padding:5px 0;font-size:11.5px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;}
+.sch-presets button:hover{color:var(--text);border-color:var(--muted-2);}
+.sch-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+@media(max-width:700px){.sch-grid{grid-template-columns:1fr;}}
 .hint{font-size:11px;color:var(--muted-2);margin-top:6px;}
 .empty{text-align:center;color:var(--muted);padding:30px 10px;font-size:13px;}
 .skeleton{background:linear-gradient(90deg,var(--panel-2) 25%,var(--border) 37%,var(--panel-2) 63%);background-size:400% 100%;
@@ -182,6 +197,7 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
   <aside class="sidebar" id="sidebar">
     <div class="brand"><span class="dot">☀</span><span>SOLARA<span class="brand-sub">SOLAR PANEL CLEANING</span></span></div>
     <div class="nav-item active" data-view="monitoring"><span class="ic">◉</span> Monitoring</div>
+    <div class="nav-item" data-view="schedule"><span class="ic">◷</span> ตั้งเวลาทำงาน</div>
     <div class="nav-item" data-view="analytics"><span class="ic">▤</span> วิเคราะห์ข้อมูล</div>
     <div class="nav-item" data-view="history"><span class="ic">▦</span> ประวัติการทำความสะอาด</div>
     <div class="nav-item" data-view="errors"><span class="ic">▲</span> Error Log</div>
@@ -245,6 +261,15 @@ const Device = {
   async brush(on){ return this._cmd(`/brush?on=${on?1:0}`); },
   async pump(on){ return this._cmd(`/pump?on=${on?1:0}`); },
   async setSpeed(v){ return this._cmd(`/speed?value=${v}`); },
+  // Schedule: status carries master (scheduleEnabled), per-slot e<i> enabled, s<i> "HH:MM", d<i> weekday bitmask
+  // (bit0=Sun ... bit6=Sat, 127 = every day). Save with /schedule?master=1&e0=1&s0=08:00&d0=62 ...
+  async saveSchedule(master, slots){
+    const p = new URLSearchParams();
+    p.set('master', master ? '1' : '0');
+    slots.forEach((x,i)=>{ p.set('e'+i, x.en?'1':'0'); p.set('s'+i, x.time||''); p.set('d'+i, x.days); });
+    return this._cmd(`/schedule?${p.toString()}`);
+  },
+  async cancelSchedule(){ return this._cmd(`/schedule?cancel=1`); },
   async _cmd(path){
     const res = await fetch(`http://${this.ip}${path}`, {signal: AbortSignal.timeout(3000)});
     const text = await res.text();
@@ -380,7 +405,7 @@ function barChart(labels,values,color){
 }
 
 /* ---------- Views ---------- */
-const titles={monitoring:'Monitoring',analytics:'วิเคราะห์ข้อมูล',history:'ประวัติการทำความสะอาด',errors:'Error Log',settings:'ตั้งค่า'};
+const titles={monitoring:'Monitoring',analytics:'วิเคราะห์ข้อมูล',history:'ประวัติการทำความสะอาด',errors:'Error Log',settings:'ตั้งค่า',schedule:'ตั้งเวลาทำงาน'};
 
 async function renderMonitoring(el){
   el.innerHTML = `<div class="grid">
@@ -634,7 +659,133 @@ function renderSettings(el){
   };
 }
 
-const renderers={monitoring:renderMonitoring,analytics:renderAnalytics,history:renderHistory,errors:renderErrors,settings:renderSettings};
+
+/* ---------- Schedule view: time + weekday selection for 10 daily slots ---------- */
+const SCH_DAY_NAMES=['อา','จ','อ','พ','พฤ','ศ','ส'];   // index = JS/ESP32 weekday (0 = Sunday)
+const SCH_DAY_ORDER=[1,2,3,4,5,6,0];                    // shown Mon..Sun
+const SCH_MOCK_KEY='solara_schedule_mock';
+function schDefault(){
+  return {master:true,slots:Array.from({length:10},(_,i)=>({en:i<2,time:i<2?`0${8+i}:00`:'',days:127}))};
+}
+function schLoadMock(){
+  try{ const v=JSON.parse(localStorage.getItem(SCH_MOCK_KEY)); if(v&&v.slots&&v.slots.length===10) return v; }catch(e){}
+  return schDefault();
+}
+function schFromStatus(s){
+  return {master:!!s.scheduleEnabled,slots:Array.from({length:10},(_,i)=>({
+    en:!!s['e'+i], time:s['s'+i]||'', days:s['d'+i]===undefined?127:s['d'+i]}))};
+}
+function schDaysText(m){
+  if(m===127) return 'ทุกวัน';
+  if(m===62) return 'จันทร์–ศุกร์';
+  if(m===65) return 'เสาร์–อาทิตย์';
+  if(m===0) return 'ยังไม่เลือกวัน';
+  return SCH_DAY_ORDER.filter(d=>m&(1<<d)).map(d=>SCH_DAY_NAMES[d]).join(' ');
+}
+
+async function renderSchedule(el){
+  clearInterval(window._schedTimer);
+  let live=false, cfg=schLoadMock(), dirty=false;
+  if(Device.ip){
+    try{ cfg=schFromStatus(await Device.getStatus()); live=true; }catch(e){ live=false; }
+  }
+  const chips=i=>SCH_DAY_ORDER.map(d=>`<label class="sch-chip"><input type="checkbox" id="schD${i}_${d}"><span>${SCH_DAY_NAMES[d]}</span></label>`).join('');
+  const slotHtml=Array.from({length:10},(_,i)=>`
+    <div class="sch-slot" id="schSlot${i}">
+      <label class="sch-top"><input type="checkbox" id="schEn${i}"><span style="white-space:nowrap;">รอบ ${i+1}</span>
+        <input type="time" id="schT${i}" aria-label="เวลา รอบ ${i+1}"></label>
+      <div class="sch-days">${chips(i)}</div>
+      <div class="sch-presets">
+        <button type="button" data-i="${i}" data-m="127">ทุกวัน</button>
+        <button type="button" data-i="${i}" data-m="62">จ–ศ</button>
+        <button type="button" data-i="${i}" data-m="65">ส–อา</button>
+      </div>
+      <div class="hint" id="schSum${i}" style="margin:0;"></div>
+    </div>`).join('');
+  el.innerHTML=`<div class="grid">
+    <div class="card c12">
+      <h3>🕒 ตารางเวลาทำงานอัตโนมัติ (10 รอบ/วัน) <span class="badge ${live?'b-ok':'b-warn'}" id="schMode" style="margin-left:4px;">${live?'ซิงก์กับ ESP32':'โหมดจำลอง (ยังไม่ส่งไปบอร์ด)'}</span></h3>
+      <div class="metric-sub" style="margin-bottom:12px;">เลือกเวลาและวันที่ต้องการให้เริ่มทำความสะอาด (ทุกวัน หรือเลือกเฉพาะบางวัน) · ใช้เวลาไทยจาก NTP ของ ESP32 · แต่ละรอบทำงานไม่เกินหนึ่งครั้งต่อวัน</div>
+      <label style="display:flex;gap:10px;align-items:center;margin-bottom:14px;font-size:13.5px;">
+        <input type="checkbox" id="schMaster" style="width:20px;height:20px;accent-color:var(--accent);"> เปิดใช้งานตารางเวลาอัตโนมัติ
+      </label>
+      <div class="sch-grid">${slotHtml}</div>
+      <div class="ctrl-row" style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn primary" id="schSave" style="flex:1 1 180px;">💾 บันทึกตารางเวลา</button>
+        <button class="btn danger" id="schOff" style="flex:1 1 180px;">⏻ ปิดตารางอัตโนมัติ</button>
+      </div>
+      <div style="margin-top:14px;display:grid;gap:6px;font-size:12.5px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;"><span style="color:var(--muted);">นาฬิกา ESP32 (ไทย)</span><b id="schClock">--</b></div>
+        <div style="display:flex;justify-content:space-between;gap:10px;"><span style="color:var(--muted);">สถานะตาราง</span><b id="schMsg" style="text-align:right;">--</b></div>
+      </div>
+      <div class="hint">บันทึกในหน่วยความจำถาวรของ ESP32 จึงคงอยู่หลังรีสตาร์ต/ไฟดับ${live?'':' · ตอนนี้ยังไม่ได้เชื่อมต่อ ESP32 จึงเก็บไว้ในเบราว์เซอร์นี้เท่านั้น (ไปที่หน้าตั้งค่าเพื่อกรอก IP)'}</div>
+    </div>
+  </div>`;
+  const $=id=>document.getElementById(id);
+  const sumRow=i=>{
+    const m=getMask(i), on=$('schEn'+i).checked;
+    $('schSum'+i).textContent=(on?'ทำงาน: ':'ปิดอยู่ · ')+schDaysText(m);
+    $('schSlot'+i).classList.toggle('off',!on);
+  };
+  const getMask=i=>{ let m=0; for(let d=0;d<7;d++) if($(`schD${i}_${d}`).checked) m|=(1<<d); return m; };
+  const setMask=(i,m)=>{ for(let d=0;d<7;d++) $(`schD${i}_${d}`).checked=!!(m&(1<<d)); };
+  const fill=c=>{
+    $('schMaster').checked=c.master;
+    c.slots.forEach((x,i)=>{ $('schEn'+i).checked=x.en; $('schT'+i).value=x.time||''; setMask(i,x.days); sumRow(i); });
+  };
+  fill(cfg);
+  el.querySelectorAll('.sch-presets button').forEach(b=>b.onclick=()=>{ setMask(+b.dataset.i,+b.dataset.m); dirty=true; sumRow(+b.dataset.i); });
+  el.querySelector('.sch-grid').addEventListener('change',e=>{
+    dirty=true;
+    const m=(e.target.id||'').match(/^sch(?:En|T|D)(\d+)/); if(m) sumRow(+m[1]);
+  });
+  $('schMaster').addEventListener('change',()=>{ dirty=true; });
+
+  const collect=()=>({master:$('schMaster').checked,slots:Array.from({length:10},(_,i)=>({en:$('schEn'+i).checked,time:$('schT'+i).value||'',days:getMask(i)}))});
+  // validate before sending, same rules as the firmware
+  const validate=c=>{
+    for(let i=0;i<10;i++){
+      const x=c.slots[i];
+      if(x.en&&!x.time) return `กรุณากำหนดเวลาให้รอบ ${i+1} หรือปิดรอบนั้น`;
+      if(x.en&&x.days===0) return `กรุณาเลือกวันอย่างน้อย 1 วันให้รอบ ${i+1} หรือปิดรอบนั้น`;
+    }
+    for(let i=0;i<10;i++) for(let j=i+1;j<10;j++){
+      const a=c.slots[i], b=c.slots[j];
+      if(a.en&&b.en&&a.time===b.time&&(a.days&b.days)) return `มีเวลาซ้ำกันระหว่างรอบ ${i+1} และรอบ ${j+1}`;
+    }
+    return '';
+  };
+  $('schSave').onclick=async()=>{
+    const c=collect(), err=validate(c);
+    if(err){ toast('⚠ '+err); return; }
+    if(!Device.ip){
+      try{ localStorage.setItem(SCH_MOCK_KEY,JSON.stringify(c)); }catch(e){}
+      dirty=false; toast('💾 บันทึกในเบราว์เซอร์แล้ว (โหมดจำลอง — ยังไม่ได้ส่งไป ESP32)'); return;
+    }
+    try{ await Device.saveSchedule(c.master,c.slots); dirty=false; toast('✅ บันทึกตารางเวลาลง ESP32 แล้ว'); poll(true); }
+    catch(e){ toast(e.fromDevice?`⚠ ESP32 ปฏิเสธ: ${e.message}`:'⚠ เชื่อมต่อ ESP32 ไม่ได้ — ตรวจสอบ IP ในหน้าตั้งค่า'); }
+  };
+  $('schOff').onclick=async()=>{
+    if(!Device.ip){ $('schMaster').checked=false; const c=collect(); try{localStorage.setItem(SCH_MOCK_KEY,JSON.stringify(c));}catch(e){} toast('ปิดตารางอัตโนมัติ (โหมดจำลอง)'); return; }
+    try{ await Device.cancelSchedule(); $('schMaster').checked=false; dirty=false; toast('⏻ ปิดตารางอัตโนมัติแล้ว'); poll(true); }
+    catch(e){ toast('⚠ เชื่อมต่อ ESP32 ไม่ได้'); }
+  };
+
+  // keep clock/status fresh; only overwrite the form when the user has no unsaved edits
+  async function poll(forceFill){
+    if(!Device.ip||!document.getElementById('schClock')) return;
+    try{
+      const s=await Device.getStatus();
+      $('schClock').textContent=s.clock||'ยังไม่ซิงก์เวลา';
+      $('schMsg').textContent=s.scheduleMessage||'--';
+      if(forceFill===true||!dirty) fill(schFromStatus(s));
+    }catch(e){ if(document.getElementById('schClock')) $('schMsg').textContent='เชื่อมต่อ ESP32 ไม่ได้'; }
+  }
+  if(Device.ip){ poll(); window._schedTimer=setInterval(()=>{ if(!document.getElementById('schClock')) clearInterval(window._schedTimer); else poll(); },3000); }
+  else { $('schClock').textContent='-- (ยังไม่เชื่อมต่อ ESP32)'; $('schMsg').textContent='โหมดจำลอง'; }
+}
+
+const renderers={schedule:renderSchedule,monitoring:renderMonitoring,analytics:renderAnalytics,history:renderHistory,errors:renderErrors,settings:renderSettings};
 
 async function nav(view){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===view));

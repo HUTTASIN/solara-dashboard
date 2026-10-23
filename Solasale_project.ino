@@ -1,16 +1,18 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <time.h>
+#include <Preferences.h>
 
 // ==================================================
 // SOLARA : ระบบทำความสะอาดแผงโซลาร์เซลล์
-// ราง (A4988 + NEMA17) + แปรง (BTS7960) + ปั๊ม (Relay)
+// ราง (A4988 + NEMA17) + แปรง (Relay) + ปั๊ม (Relay)
 // ==================================================
 
 // ==================================================
 // 1. ตั้งค่า Wi-Fi
 // ==================================================
-const char* WIFI_SSID = "true_home2G_248";
-const char* WIFI_PASSWORD = "7u393g45";
+const char* WIFI_SSID = "Kat";
+const char* WIFI_PASSWORD = "1234567890";
 
 WebServer server(80);
 
@@ -23,11 +25,8 @@ WebServer server(80);
 #define DIR_PIN  26
 #define EN_PIN   27
 
-// BTS7960 : มอเตอร์แปรง
-#define RPWM_PIN 32
-#define LPWM_PIN 33
-#define R_EN_PIN 35
-#define L_EN_PIN 34
+// Relay 1 ช่อง : มอเตอร์แปรง (เปิด/ปิดเท่านั้น)
+#define BRUSH_RELAY_PIN 15
 
 // Limit Switch
 #define LIMIT_LEFT_PIN  22
@@ -42,8 +41,9 @@ WebServer server(80);
 // 3. ตั้งค่าที่ต้องตรวจสอบกับอุปกรณ์จริง
 // ==================================================
 
-// ถ้ารีเลย์เปิดเมื่อ GPIO เป็น LOW ให้ใช้ true
-const bool RELAY_ACTIVE_LOW = false;
+// ตั้งค่าตามโมดูลรีเลย์แต่ละตัว: ถ้าเปิดเมื่อ GPIO เป็น LOW ให้ใช้ true
+const bool RELAY_ACTIVE_LOW = false;        // รีเลย์ปั๊มน้ำ GPIO 5
+const bool BRUSH_RELAY_ACTIVE_LOW = false;  // รีเลย์มอเตอร์แปรง GPIO 16
 
 // ถ้ารางวิ่งผิดทิศ ให้เปลี่ยน HIGH เป็น LOW
 const uint8_t DIR_RIGHT_LEVEL = HIGH;
@@ -62,7 +62,7 @@ const unsigned long LIMIT_CONFIRM_MS = 20;
 // จำนวน "เที่ยว" ที่รางวิ่ง แต่ละเที่ยววิ่งจนชน Limit แล้วเด้งกลับ
 //   3 = ชนขวา -> เด้งไปชนซ้าย -> เด้งกลับมาชนขวา (ค่าเริ่มต้น)
 //   2 = ชนขวา -> เด้งไปชนซ้าย แล้วจบ (ไป-กลับ 1 รอบ)
-const uint8_t SWEEP_LEGS = 3;
+const uint8_t SWEEP_LEGS = 2;
 
 // ป้องกันกรณี Limit Switch เสีย/สายหลุด: ถ้าวิ่งเที่ยวเดียวนานเกินเวลานี้
 // จะหยุดทุกอุปกรณ์ทันที (ปรับให้มากกว่าเวลาที่รางวิ่งสุดทางจริง)
@@ -101,6 +101,135 @@ long lastLegSteps = 0;          // จำนวน steps ที่เที่�
 unsigned long limitSinceMs = 0; // เวลาที่เริ่มเห็น Limit ถูกกด (0 = ยังไม่เห็น)
 
 String cycleMessage = "Ready";
+
+// ==================================================
+// 4A. ตารางเวลาอัตโนมัติ 10 รอบ/วัน (เวลาไทย UTC+7)
+// ==================================================
+const uint8_t SCHEDULE_SLOTS = 10;
+const uint8_t ALL_DAYS = 0x7F;
+struct ScheduleSlot {
+  bool enabled;
+  uint16_t minuteOfDay;
+  uint8_t days;        // bitmask วันที่ทำงาน: bit0=อาทิตย์ ... bit6=เสาร์ (ตรงกับ tm_wday), 0x7F = ทุกวัน
+  int32_t lastRunDay;  // YYYY*1000 + day-of-year; ป้องกันรันซ้ำในวันเดียวกัน
+};
+ScheduleSlot scheduleSlots[SCHEDULE_SLOTS];
+bool scheduleEnabled = true; // สวิตช์หลักของตารางเวลา
+bool clockSynced = false;
+String scheduleMessage = "Schedule ready";
+unsigned long lastClockCheckMs = 0;
+Preferences schedulePrefs;
+
+bool cycleRunning();
+bool startCycle();
+
+String formatSlotTime(uint16_t minuteOfDay) {
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%02u:%02u", minuteOfDay / 60, minuteOfDay % 60);
+  return String(buf);
+}
+
+bool parseSlotTime(const String &hhmm, uint16_t &minuteOfDay) {
+  if (hhmm.length() != 5 || hhmm.charAt(2) != ':') return false;
+  if (!isDigit(hhmm.charAt(0)) || !isDigit(hhmm.charAt(1)) ||
+      !isDigit(hhmm.charAt(3)) || !isDigit(hhmm.charAt(4))) return false;
+  int hh = hhmm.substring(0, 2).toInt();
+  int mm = hhmm.substring(3, 5).toInt();
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return false;
+  minuteOfDay = (uint16_t)(hh * 60 + mm);
+  return true;
+}
+
+int32_t dayKey(const struct tm &t) {
+  return (int32_t)(t.tm_year + 1900) * 1000 + t.tm_yday;
+}
+
+void saveSchedule() {
+  schedulePrefs.putBool("master", scheduleEnabled);
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    char key[12];
+    snprintf(key, sizeof(key), "en%u", i);
+    schedulePrefs.putBool(key, scheduleSlots[i].enabled);
+    snprintf(key, sizeof(key), "min%u", i);
+    schedulePrefs.putUShort(key, scheduleSlots[i].minuteOfDay);
+    snprintf(key, sizeof(key), "day%u", i);
+    schedulePrefs.putInt(key, scheduleSlots[i].lastRunDay);
+    snprintf(key, sizeof(key), "dy%u", i);
+    schedulePrefs.putUChar(key, scheduleSlots[i].days);
+  }
+}
+
+void loadSchedule() {
+  schedulePrefs.begin("solaraSched", false);
+  bool hasConfig = schedulePrefs.isKey("init");
+  if (!hasConfig) {
+    scheduleEnabled = true;
+    for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+      scheduleSlots[i].enabled = (i < 2);
+      scheduleSlots[i].minuteOfDay = (uint16_t)((8 + i) * 60);
+      scheduleSlots[i].days = ALL_DAYS;
+      scheduleSlots[i].lastRunDay = -1;
+    }
+    schedulePrefs.putBool("init", true);
+    saveSchedule();
+  } else {
+    scheduleEnabled = schedulePrefs.getBool("master", true);
+    for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+      char key[12];
+      snprintf(key, sizeof(key), "en%u", i);
+      scheduleSlots[i].enabled = schedulePrefs.getBool(key, i < 2);
+      snprintf(key, sizeof(key), "min%u", i);
+      scheduleSlots[i].minuteOfDay = schedulePrefs.getUShort(key, (uint16_t)((8 + i) * 60));
+      if (scheduleSlots[i].minuteOfDay > 1439) scheduleSlots[i].minuteOfDay = 0;
+      snprintf(key, sizeof(key), "day%u", i);
+      scheduleSlots[i].lastRunDay = schedulePrefs.getInt(key, -1);
+      snprintf(key, sizeof(key), "dy%u", i);
+      // เฟิร์มแวร์เวอร์ชันเก่าไม่มีค่านี้ -> ใช้ทุกวันเหมือนเดิม
+      scheduleSlots[i].days = schedulePrefs.getUChar(key, ALL_DAYS) & ALL_DAYS;
+    }
+  }
+}
+
+bool syncClock() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+  struct tm timeInfo;
+  if (getLocalTime(&timeInfo, 1500)) {
+    clockSynced = true;
+    return true;
+  }
+  return false;
+}
+
+void updateDailySchedule() {
+  if (!scheduleEnabled || WiFi.status() != WL_CONNECTED) return;
+  struct tm nowInfo;
+  if (!getLocalTime(&nowInfo, 0)) { clockSynced = false; return; }
+  clockSynced = true;
+
+  const uint16_t currentMinute = (uint16_t)(nowInfo.tm_hour * 60 + nowInfo.tm_min);
+  const int32_t today = dayKey(nowInfo);
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    ScheduleSlot &slot = scheduleSlots[i];
+    if (!slot.enabled || slot.minuteOfDay != currentMinute || slot.lastRunDay == today) continue;
+    if (((slot.days >> nowInfo.tm_wday) & 1) == 0) continue;   // วันนี้ไม่ได้เลือกไว้
+
+    // บันทึกวันก่อนสั่งงาน เพื่อป้องกันการสั่งซ้ำหลัง loop/รีสตาร์ต
+    slot.lastRunDay = today;
+    char key[12];
+    snprintf(key, sizeof(key), "day%u", i);
+    schedulePrefs.putInt(key, today);
+
+    if (cycleRunning()) {
+      scheduleMessage = "Slot " + String(i + 1) + " skipped: previous cycle still running";
+    } else {
+      bool started = startCycle();
+      scheduleMessage = started
+        ? "Slot " + String(i + 1) + " started at " + formatSlotTime(slot.minuteOfDay)
+        : "Slot " + String(i + 1) + " failed: " + cycleMessage;
+    }
+  }
+}
 
 // ==================================================
 // 5. ฟังก์ชันอ่านปุ่มแบบ Debounce
@@ -175,19 +304,11 @@ void setPump(bool on) {
 void setBrush(bool on) {
   brushOn = on;
 
-  if (on) {
-    // เปิดใช้งานทั้งสองช่องของ BTS7960
-    digitalWrite(R_EN_PIN, HIGH);
-    digitalWrite(L_EN_PIN, HIGH);
-
-    // สั่ง PWM เต็มกำลังไปทางเดียว: RPWM = 100%, LPWM = 0%
-    // ใช้ analogWrite เพื่อกำหนด duty cycle ชัดเจนบน ESP32
-    analogWrite(LPWM_PIN, 0);
-    analogWrite(RPWM_PIN, 255);
+  // รีเลย์มอเตอร์แปรง: เปิด/ปิดเท่านั้น ไม่มีการปรับความเร็วหรือกลับทิศ
+  if (BRUSH_RELAY_ACTIVE_LOW) {
+    digitalWrite(BRUSH_RELAY_PIN, on ? LOW : HIGH);
   } else {
-    // หยุดสัญญาณขับมอเตอร์ทั้งสองด้าน
-    analogWrite(RPWM_PIN, 0);
-    analogWrite(LPWM_PIN, 0);
+    digitalWrite(BRUSH_RELAY_PIN, on ? HIGH : LOW);
   }
 }
 
@@ -307,9 +428,9 @@ bool startCycle() {
 
   legsDone = 0;
 
-  // ปกติวิ่งไปทางขวาก่อน
-  // หากเริ่มต้นโดยกด Limit ขวาอยู่ ให้เริ่มจากถอยไปทางซ้าย
-  bool firstToRight = !rightLimitPressed();
+// ปกติวิ่งไปทางซ้ายก่อน
+// หากเริ่มต้นโดยกด Limit ซ้ายอยู่ ให้เริ่มจากถอยไปทางขวา
+  bool firstToRight = leftLimitPressed();
 
   if (beginLeg(firstToRight)) {
     return true;
@@ -530,6 +651,34 @@ button{border:1px solid #34435d;border-radius:13px;min-height:52px;padding:12px 
   </div>
 
   <div class="card">
+    <h2>🕒 ตารางเวลาอัตโนมัติ (10 รอบ/วัน)</h2>
+    <p>เลือกเปิด/ปิดแต่ละรอบ กำหนดเวลา และเลือกวันที่ทำงานได้ (ทุกวัน / เฉพาะบางวัน) ระบบอ้างอิงเวลาไทยจาก NTP และทำงานแต่ละรอบไม่เกินหนึ่งครั้งต่อวัน</p>
+    <label style="display:flex;gap:10px;align-items:center;margin:12px 0;color:var(--text)">
+      <input id="scheduleMaster" type="checkbox" checked style="width:20px;height:20px"> เปิดใช้งานตารางเวลาอัตโนมัติ
+    </label>
+    <style>
+      .slot{padding:10px;border:1px solid #34435d;border-radius:10px;display:flex;flex-direction:column;gap:8px}
+      .slot-top{display:flex;align-items:center;gap:8px;color:var(--text)}
+      .slot-top input[type=time]{min-width:0;flex:1;padding:7px;border-radius:8px;border:1px solid #34435d;background:#0b1424;color:#fff}
+      .days{display:flex;gap:4px;flex-wrap:wrap}
+      .dchip{flex:1 1 0;min-width:30px}
+      .dchip input{display:none}
+      .dchip span{display:block;text-align:center;padding:6px 0;border-radius:8px;border:1px solid #34435d;color:#9fb0c8;font-size:13px;cursor:pointer;user-select:none}
+      .dchip input:checked+span{background:#2ea44f;border-color:#2ea44f;color:#fff;font-weight:700}
+      .presets{display:flex;gap:6px}
+      .presets button{flex:1;padding:5px 0;font-size:12px;border-radius:7px;border:1px solid #34435d;background:transparent;color:#9fb0c8;cursor:pointer}
+      @media(max-width:560px){#scheduleSlots{grid-template-columns:1fr!important}}
+    </style>
+    <div id="scheduleSlots" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px"></div>
+    <button class="start full" onclick="saveScheduleTable()">บันทึกตารางเวลา</button>
+    <div class="row"><span>Clock (Thailand)</span><b id="clock">--</b></div>
+    <div class="row"><span>Schedule</span><b id="scheduleState">--</b></div>
+    <div class="row"><span>Schedule status</span><b id="scheduleMessage">--</b></div>
+    <button class="stop full" onclick="cmd('/schedule?cancel=1')">ปิดตารางเวลาอัตโนมัติ</button>
+    <small>ตารางเวลาและสถานะรอบที่ทำแล้วบันทึกในหน่วยความจำถาวรของ ESP32 จึงคงอยู่หลังรีสตาร์ต/ไฟดับ</small>
+  </div>
+
+  <div class="card">
     <h2>📊 System Status</h2>
     <div class="row"><span>Cycle</span><b id="cycle">--</b></div>
     <div class="row"><span>Passes done</span><b id="legs">--</b></div>
@@ -547,11 +696,60 @@ async function cmd(path) {
   try {
     const r = await fetch(path);
     const t = await r.text();
-    if (!r.ok) alert(t);
+    if (!r.ok) { alert(t); return false; }
     await refreshStatus();
+    return true;
   } catch(e) {
     alert('เชื่อมต่อ ESP32 ไม่ได้');
+    return false;
   }
+}
+
+const DAY_ORDER = [1,2,3,4,5,6,0];                    // แสดง จ-อา (ค่า bit ตรงกับ tm_wday: 0=อาทิตย์)
+const DAY_NAMES = ['อา','จ','อ','พ','พฤ','ศ','ส'];
+let schedDirty = false;                               // กำลังแก้ไขตาราง -> ไม่ให้ status มาเขียนทับ
+
+function buildSlots() {
+  let h = '';
+  for (let i = 0; i < 10; i++) {
+    h += '<div class="slot"><label class="slot-top">' +
+         '<input id="slotEn' + i + '" type="checkbox" style="width:18px;height:18px">' +
+         '<span style="white-space:nowrap">รอบ ' + (i + 1) + '</span>' +
+         '<input id="slotTime' + i + '" type="time" aria-label="เวลา รอบ ' + (i + 1) + '"></label>' +
+         '<div class="days">';
+    for (const d of DAY_ORDER) {
+      h += '<label class="dchip"><input type="checkbox" id="slotDay' + i + '_' + d + '"><span>' + DAY_NAMES[d] + '</span></label>';
+    }
+    h += '</div><div class="presets">' +
+         '<button type="button" onclick="setDays(' + i + ',127)">ทุกวัน</button>' +
+         '<button type="button" onclick="setDays(' + i + ',62)">จ-ศ</button>' +
+         '<button type="button" onclick="setDays(' + i + ',65)">ส-อา</button></div></div>';
+  }
+  $('scheduleSlots').innerHTML = h;
+  $('scheduleSlots').addEventListener('change', () => { schedDirty = true; });
+  $('scheduleMaster').addEventListener('change', () => { schedDirty = true; });
+}
+
+function getDays(i) {
+  let m = 0;
+  for (let d = 0; d < 7; d++) if ($('slotDay' + i + '_' + d).checked) m |= (1 << d);
+  return m;
+}
+
+function setDays(i, mask) {
+  for (let d = 0; d < 7; d++) $('slotDay' + i + '_' + d).checked = !!(mask & (1 << d));
+  schedDirty = true;
+}
+
+async function saveScheduleTable() {
+  const params = new URLSearchParams();
+  params.set('master', $('scheduleMaster').checked ? '1' : '0');
+  for (let i = 0; i < 10; i++) {
+    params.set('e' + i, $('slotEn' + i).checked ? '1' : '0');
+    params.set('s' + i, $('slotTime' + i).value || '');
+    params.set('d' + i, getDays(i));
+  }
+  if (await cmd('/schedule?' + params.toString())) schedDirty = false;
 }
 
 const $ = id => document.getElementById(id);
@@ -576,11 +774,24 @@ async function refreshStatus() {
     $('right').textContent = s.right;
     $('speedVal').textContent = s.speed;
     $('speed').value = s.speed;
+    $('clock').textContent = s.clock || 'Not synced';
+    $('scheduleState').textContent = s.scheduleEnabled ? 'ON' : 'OFF';
+    $('scheduleMessage').textContent = s.scheduleMessage || '--';
+    if (!schedDirty) {
+      $('scheduleMaster').checked = !!s.scheduleEnabled;
+      for (let i = 0; i < 10; i++) {
+        $('slotEn' + i).checked = !!s['e' + i];
+        $('slotTime' + i).value = s['s' + i] || '';
+        const dm = (s['d' + i] === undefined) ? 127 : s['d' + i];
+        for (let d = 0; d < 7; d++) $('slotDay' + i + '_' + d).checked = !!(dm & (1 << d));
+      }
+    }
   } catch(e) {
     $('message').textContent = 'Connection lost';
   }
 }
 
+buildSlots();
 setInterval(refreshStatus, 1000);
 refreshStatus();
 </script>
@@ -688,6 +899,98 @@ void handleSpeed() {
   reply(200, "text/plain", String(speedSPS));
 }
 
+void handleSchedule() {
+  if (server.hasArg("cancel")) {
+    scheduleEnabled = false;
+    saveSchedule();
+    scheduleMessage = "Automatic schedule disabled";
+    reply(200, "text/plain; charset=utf-8", "Automatic schedule disabled");
+    return;
+  }
+
+  // Compatibility: /schedule?time=HH:MM configures slot 1 only.
+  if (server.hasArg("time") && !server.hasArg("s0")) {
+    uint16_t minuteOfDay;
+    if (!parseSlotTime(server.arg("time"), minuteOfDay)) {
+      reply(400, "text/plain; charset=utf-8", "Invalid time. Use HH:MM");
+      return;
+    }
+    scheduleSlots[0].minuteOfDay = minuteOfDay;
+    scheduleSlots[0].enabled = true;
+    scheduleEnabled = true;
+    saveSchedule();
+    scheduleMessage = "Slot 1 saved: " + formatSlotTime(minuteOfDay);
+    reply(200, "text/plain; charset=utf-8", scheduleMessage);
+    return;
+  }
+
+  if (!server.hasArg("master")) {
+    reply(400, "text/plain; charset=utf-8", "Missing master setting");
+    return;
+  }
+
+  // ตรวจสอบทุกเวลาที่ส่งมาก่อนบันทึก เพื่อไม่ให้ตารางถูกบันทึกครึ่งหนึ่ง
+  uint16_t parsedTimes[SCHEDULE_SLOTS];
+  uint8_t parsedDays[SCHEDULE_SLOTS];
+  bool enabledValues[SCHEDULE_SLOTS];
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    String eKey = "e" + String(i);
+    String sKey = "s" + String(i);
+    enabledValues[i] = server.hasArg(eKey) && server.arg(eKey) == "1";
+    String timeValue = server.hasArg(sKey) ? server.arg(sKey) : "";
+
+    // วันที่ทำงาน: d<i> = bitmask 0-127 (ไม่ส่งมา = คงค่าเดิม)
+    String dKey = "d" + String(i);
+    if (server.hasArg(dKey)) {
+      int dv = server.arg(dKey).toInt();
+      if (dv < 0 || dv > ALL_DAYS) {
+        reply(400, "text/plain; charset=utf-8", "วันที่ไม่ถูกต้องในรอบ " + String(i + 1));
+        return;
+      }
+      parsedDays[i] = (uint8_t)dv;
+    } else {
+      parsedDays[i] = scheduleSlots[i].days;
+    }
+    if (enabledValues[i] && parsedDays[i] == 0) {
+      reply(400, "text/plain; charset=utf-8", "กรุณาเลือกวันอย่างน้อย 1 วันให้รอบ " + String(i + 1) + " หรือปิดรอบนั้น");
+      return;
+    }
+
+    if (timeValue.length() == 0) {
+      parsedTimes[i] = scheduleSlots[i].minuteOfDay;
+      if (enabledValues[i]) {
+        reply(400, "text/plain; charset=utf-8", "กรุณากำหนดเวลาให้รอบ " + String(i + 1) + " หรือปิดรอบนั้น");
+        return;
+      }
+    } else if (!parseSlotTime(timeValue, parsedTimes[i])) {
+      reply(400, "text/plain; charset=utf-8", "เวลาไม่ถูกต้องในรอบ " + String(i + 1));
+      return;
+    }
+  }
+
+  // ไม่อนุญาตให้ตั้งเวลาเดียวกันมากกว่าหนึ่งรอบ ป้องกันสั่ง cycle ซ้ำเวลาเดียวกัน
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    if (!enabledValues[i]) continue;
+    for (uint8_t j = i + 1; j < SCHEDULE_SLOTS; j++) {
+      // ซ้ำเฉพาะกรณีเวลาเดียวกัน และมีวันที่ทำงานทับกัน
+      if (enabledValues[j] && parsedTimes[i] == parsedTimes[j] && (parsedDays[i] & parsedDays[j])) {
+        reply(400, "text/plain; charset=utf-8", "มีเวลาซ้ำกันระหว่างรอบ " + String(i + 1) + " และรอบ " + String(j + 1));
+        return;
+      }
+    }
+  }
+
+  scheduleEnabled = (server.arg("master") == "1");
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    scheduleSlots[i].enabled = enabledValues[i];
+    scheduleSlots[i].minuteOfDay = parsedTimes[i];
+    scheduleSlots[i].days = parsedDays[i];
+  }
+  saveSchedule();
+  scheduleMessage = scheduleEnabled ? "Schedule table saved" : "Schedule table saved; automatic mode OFF";
+  reply(200, "text/plain; charset=utf-8", scheduleMessage);
+}
+
 void handleStatus() {
   String json = "{";
 
@@ -713,7 +1016,29 @@ void handleStatus() {
   json += "\"direction\":";
   json += railMoving ? (railToRight ? "1," : "-1,") : "0,";
   json += "\"legsDone\":" + String(legsDone) + ",";
-  json += "\"legsTotal\":" + String(SWEEP_LEGS);
+  json += "\"legsTotal\":" + String(SWEEP_LEGS) + ",";
+  json += "\"clockSynced\":" + String(clockSynced ? "true" : "false") + ",";
+  json += "\"clock\":\"";
+  struct tm timeInfo;
+  if (getLocalTime(&timeInfo, 0)) {
+    char timeBuf[24];
+    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeInfo);
+    json += String(timeBuf);
+  } else {
+    json += "Not synced";
+  }
+  json += "\",";
+  json += "\"scheduleEnabled\":" + String(scheduleEnabled ? "true" : "false") + ",";
+  for (uint8_t i = 0; i < SCHEDULE_SLOTS; i++) {
+    json += "\"e" + String(i) + "\":" + String(scheduleSlots[i].enabled ? "true" : "false") + ",";
+    json += "\"s" + String(i) + "\":\"" + formatSlotTime(scheduleSlots[i].minuteOfDay) + "\",";
+    json += "\"d" + String(i) + "\":" + String(scheduleSlots[i].days) + ",";
+  }
+  String safeScheduleMessage = scheduleMessage;
+  safeScheduleMessage.replace("\"", "'");
+  safeScheduleMessage.replace("\n", " ");
+  safeScheduleMessage.replace("\r", " ");
+  json += "\"scheduleMessage\":\"" + safeScheduleMessage + "\"";
 
   json += "}";
 
@@ -742,6 +1067,7 @@ void setupWebServer() {
   server.on("/brush", HTTP_GET, handleBrush);
   server.on("/pump", HTTP_GET, handlePump);
   server.on("/speed", HTTP_GET, handleSpeed);
+  server.on("/schedule", HTTP_GET, handleSchedule);
   server.on("/status", HTTP_GET, handleStatus);
   server.onNotFound(handleNotFound);
 
@@ -754,33 +1080,29 @@ void setupWebServer() {
 
 void setup() {
   Serial.begin(115200);
+  loadSchedule();
 
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
   pinMode(EN_PIN, OUTPUT);
 
-  pinMode(RPWM_PIN, OUTPUT);
-  pinMode(LPWM_PIN, OUTPUT);
-  pinMode(R_EN_PIN, OUTPUT);
-  pinMode(L_EN_PIN, OUTPUT);
-
   pinMode(LIMIT_LEFT_PIN, INPUT_PULLUP);
   pinMode(LIMIT_RIGHT_PIN, INPUT_PULLUP);
 
   pinMode(RELAY_PIN, OUTPUT);
+  pinMode(BRUSH_RELAY_PIN, OUTPUT);
 
   // เริ่มต้นโดยปิดอุปกรณ์ทั้งหมด
   digitalWrite(STEP_PIN, LOW);
   digitalWrite(EN_PIN, HIGH);
 
-  digitalWrite(RPWM_PIN, LOW);
-  digitalWrite(LPWM_PIN, LOW);
-  digitalWrite(R_EN_PIN, HIGH);
-  digitalWrite(L_EN_PIN, HIGH);
-
   digitalWrite(
     RELAY_PIN,
     RELAY_ACTIVE_LOW ? HIGH : LOW
+  );
+  digitalWrite(
+    BRUSH_RELAY_PIN,
+    BRUSH_RELAY_ACTIVE_LOW ? HIGH : LOW
   );
 
   initButton(startButton);
@@ -812,6 +1134,9 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Dashboard IP: http://");
     Serial.println(WiFi.localIP());
+    Serial.println("Syncing Thailand time via NTP...");
+    if (syncClock()) Serial.println("NTP time synced (UTC+7).");
+    else Serial.println("NTP time not ready yet; will retry in loop.");
   } else {
     Serial.println("Wi-Fi connection failed.");
     Serial.println("Physical buttons remain available; retrying in background.");
@@ -830,6 +1155,13 @@ void setup() {
 
 void loop() {
   server.handleClient();
+
+  // ซิงก์เวลาใหม่เป็นระยะเมื่อ Wi-Fi พร้อมใช้งาน
+  if (WiFi.status() == WL_CONNECTED && millis() - lastClockCheckMs >= 30000UL) {
+    lastClockCheckMs = millis();
+    if (!clockSynced) syncClock();
+  }
+  updateDailySchedule();
 
   // STOP มีลำดับความสำคัญสูงกว่า START
   if (pressedEvent(stopButton)) {

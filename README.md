@@ -42,6 +42,30 @@ the file, unchanged from the original firmware) as a station and serves:
 | GET    | `/brush?on=1\|0`    | manual brush                                                   |
 | GET    | `/pump?on=1\|0`     | manual pump                                                    |
 | GET    | `/speed?value=N`    | rail speed, 100–800 steps/sec                                  |
+| GET    | `/schedule?...`     | save the auto schedule (see below)                             |
+
+### Auto schedule (time + weekdays)
+
+10 slots per day. Each slot has an enable flag, a start time (Thai time, NTP) and
+a **weekday mask**, so a slot can run every day or only on chosen days. Both the
+website (menu **ตั้งเวลาทำงาน**) and the ESP32's own page have the day pickers
+(จ อ พ พฤ ศ ส อา, with quick buttons: ทุกวัน / จ–ศ / ส–อา).
+
+`GET /schedule?master=1&e0=1&s0=08:00&d0=62&e1=1&s1=17:30&d1=127 ...`
+
+| Param | Meaning |
+|-------|---------|
+| `master` | `1`/`0` — whole schedule on/off |
+| `e<i>`   | slot *i* (0–9) enabled `1`/`0` |
+| `s<i>`   | start time `HH:MM` |
+| `d<i>`   | weekday bitmask 0–127: bit0 = Sun, bit1 = Mon … bit6 = Sat (`127` = every day, `62` = Mon–Fri, `65` = Sat+Sun). Omitted = keep old value |
+| `cancel=1` | turn the whole schedule off |
+
+`/status` returns `d0`…`d9` alongside `e<i>` / `s<i>`. Two slots may share the same
+time only if their days don't overlap. Saved days live in flash (key `dy<i>`);
+firmware older than this version has no `dy` keys, so existing slots default to
+every day. **Re-flash `Solasale_project.ino`** after updating `index.html`, otherwise
+the old firmware ignores the website's day selection.
 
 ### What START does (web button or physical button)
 
