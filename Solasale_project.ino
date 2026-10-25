@@ -3,6 +3,14 @@
 #include <time.h>
 #include <Preferences.h>
 
+// ประกาศ struct ไว้บนสุด เพื่อให้ prototype ที่ Arduino IDE สร้างอัตโนมัติรู้จักชนิด Button
+struct Button {
+  uint8_t pin;
+  bool stableState;
+  bool lastReading;
+  unsigned long lastChange;
+};
+
 // ==================================================
 // SOLARA : ระบบทำความสะอาดแผงโซลาร์เซลล์
 // ราง (A4988 + NEMA17) + แปรง (Relay) + ปั๊ม (Relay)
@@ -37,6 +45,10 @@ WebServer server(80);
 #define START_BUTTON_PIN 21
 #define STOP_BUTTON_PIN  13
 
+// LDR วัดแสง (ADC1 ใช้ร่วมกับ Wi-Fi ได้ / GPIO 34, 35 เป็นขา input-only ไม่ต้องใช้ pull-up)
+#define LDR34_PIN 34   // LDR ตัวอ้างอิง
+#define LDR35_PIN 35   // LDR ตัวที่ตรวจเทียบ
+
 // ==================================================
 // 3. ตั้งค่าที่ต้องตรวจสอบกับอุปกรณ์จริง
 // ==================================================
@@ -67,6 +79,16 @@ const uint8_t SWEEP_LEGS = 2;
 // ป้องกันกรณี Limit Switch เสีย/สายหลุด: ถ้าวิ่งเที่ยวเดียวนานเกินเวลานี้
 // จะหยุดทุกอุปกรณ์ทันที (ปรับให้มากกว่าเวลาที่รางวิ่งสุดทางจริง)
 const unsigned long LEG_TIMEOUT_MS = 360000UL;   // 6 นาที
+
+// ---- LDR สั่งงานอัตโนมัติ ----
+// เงื่อนไข: ค่าแสง LDR35 ต่ำกว่า LDR34 มากกว่า LDR_DROP_PERCENT % -> สั่ง START อัตโนมัติ
+// ค่าที่อ่านเป็น ADC 12 บิต (0-4095) ยิ่งมาก = ยิ่งสว่าง
+// ถ้าวงจรของคุณต่อกลับด้าน (สว่างแล้วค่า ADC ลดลง) ให้เปลี่ยนเป็น false
+const bool LDR_HIGHER_IS_BRIGHTER = true;
+const float LDR_DROP_PERCENT = 30.0;                 // LDR35 ต้องต่ำกว่า LDR34 อย่างน้อยกี่ %
+const int LDR_MIN_REF_LIGHT = 300;                   // LDR34 ต้องสว่างอย่างน้อยเท่านี้ (กันสั่งงานตอนมืด/ค่านิ่งต่ำ)
+const unsigned long LDR_HOLD_MS = 5000UL;            // เงื่อนไขต้องคงอยู่ต่อเนื่องกี่ ms ก่อนสั่งงาน (กันเงา/นกบัง ชั่วคราว)
+const unsigned long LDR_COOLDOWN_MS = 1800000UL;     // หลังจบรอบ รอกี่ ms ก่อนยอมให้ LDR สั่งซ้ำ (30 นาที)
 
 // ==================================================
 // 4. ตัวแปรสถานะ
@@ -234,13 +256,6 @@ void updateDailySchedule() {
 // ==================================================
 // 5. ฟังก์ชันอ่านปุ่มแบบ Debounce
 // ==================================================
-
-struct Button {
-  uint8_t pin;
-  bool stableState;
-  bool lastReading;
-  unsigned long lastChange;
-};
 
 Button startButton = { START_BUTTON_PIN, HIGH, HIGH, 0 };
 Button stopButton  = { STOP_BUTTON_PIN,  HIGH, HIGH, 0 };
@@ -547,6 +562,146 @@ void updateManualLimits() {
 }
 
 // ==================================================
+// 13. LDR วัดแสง + สั่งงานอัตโนมัติ
+// ==================================================
+
+enum LdrState {
+  LDR_OFF,
+  LDR_LOW_LIGHT,
+  LDR_NORMAL,
+  LDR_CONFIRMING,
+  LDR_COOLDOWN,
+  LDR_RUNNING,
+  LDR_MANUAL
+};
+
+float ldr34Light = 0;          // ค่าแสงที่กรองแล้ว 0-4095 (มาก = สว่าง)
+float ldr35Light = 0;
+bool ldrReady = false;
+bool ldrAutoEnabled = true;    // สวิตช์เปิด/ปิดการสั่งงานด้วย LDR (บันทึกลง flash)
+LdrState ldrState = LDR_NORMAL;
+bool ldrCooldownActive = false;
+unsigned long ldrCooldownStartMs = 0;
+String ldrMessage = "LDR ready";
+
+void loadLdrSetting() {
+  ldrAutoEnabled = schedulePrefs.getBool("ldrAuto", true);
+}
+
+void saveLdrSetting() {
+  schedulePrefs.putBool("ldrAuto", ldrAutoEnabled);
+}
+
+int readLdrLight(uint8_t pin) {
+  int raw = analogRead(pin);
+  return LDR_HIGHER_IS_BRIGHTER ? raw : (4095 - raw);
+}
+
+// เฉลี่ย 8 ตัวอย่าง (ตัวอย่างละ 25 ms) แล้วทำ moving average ต่ออีกชั้น
+// อ่านทีละน้อยเพื่อไม่รบกวนจังหวะสเต็ปเปอร์
+void updateLdr() {
+  static unsigned long lastSampleMs = 0;
+  static long sum34 = 0;
+  static long sum35 = 0;
+  static uint8_t count = 0;
+
+  unsigned long now = millis();
+  if (now - lastSampleMs < 25) return;
+  lastSampleMs = now;
+
+  sum34 += readLdrLight(LDR34_PIN);
+  sum35 += readLdrLight(LDR35_PIN);
+  count++;
+  if (count < 8) return;
+
+  float avg34 = sum34 / 8.0f;
+  float avg35 = sum35 / 8.0f;
+  sum34 = 0;
+  sum35 = 0;
+  count = 0;
+
+  if (!ldrReady) {
+    ldr34Light = avg34;
+    ldr35Light = avg35;
+    ldrReady = true;
+  } else {
+    ldr34Light += 0.25f * (avg34 - ldr34Light);
+    ldr35Light += 0.25f * (avg35 - ldr35Light);
+  }
+}
+
+// LDR35 ต่ำกว่า LDR34 กี่ % (ค่าลบ = LDR35 สว่างกว่า)
+float ldrDropPercent() {
+  if (ldr34Light <= 1.0f) return 0.0f;
+  return (ldr34Light - ldr35Light) / ldr34Light * 100.0f;
+}
+
+void updateLdrAutoStart() {
+  static unsigned long belowSinceMs = 0;   // 0 = เงื่อนไขยังไม่เกิด
+  static bool cycleSeen = false;
+
+  if (!ldrReady) return;
+  unsigned long now = millis();
+
+  // จบรอบ (ไม่ว่าจะสั่งจากที่ไหน/กด STOP) -> เริ่มนับพักรอบ กันสั่งซ้ำทันที
+  if (cycleRunning()) {
+    cycleSeen = true;
+  } else if (cycleSeen) {
+    cycleSeen = false;
+    ldrCooldownActive = true;
+    ldrCooldownStartMs = now;
+  }
+  if (ldrCooldownActive && (now - ldrCooldownStartMs) >= LDR_COOLDOWN_MS) {
+    ldrCooldownActive = false;
+  }
+
+  bool manual = !cycleRunning() && (railMoving || brushOn || pumpOn);
+  bool lowLight = ldr34Light < LDR_MIN_REF_LIGHT;
+  bool dropped = !lowLight && ldrDropPercent() > LDR_DROP_PERCENT;
+
+  if (!ldrAutoEnabled) { ldrState = LDR_OFF;       belowSinceMs = 0; return; }
+  if (cycleRunning())  { ldrState = LDR_RUNNING;   belowSinceMs = 0; return; }
+  if (manual)          { ldrState = LDR_MANUAL;    belowSinceMs = 0; return; }
+  if (ldrCooldownActive) { ldrState = LDR_COOLDOWN; belowSinceMs = 0; return; }
+  if (lowLight)        { ldrState = LDR_LOW_LIGHT; belowSinceMs = 0; return; }
+  if (!dropped)        { ldrState = LDR_NORMAL;    belowSinceMs = 0; return; }
+
+  // LDR35 ต่ำกว่าเกณฑ์: ต้องคงอยู่ต่อเนื่อง LDR_HOLD_MS ก่อนสั่งงาน
+  if (belowSinceMs == 0) {
+    belowSinceMs = now;
+    if (belowSinceMs == 0) belowSinceMs = 1;
+  }
+  ldrState = LDR_CONFIRMING;
+  if (now - belowSinceMs < LDR_HOLD_MS) return;
+
+  belowSinceMs = 0;
+  ldrCooldownActive = true;          // กันสั่งซ้ำ ไม่ว่าเริ่มรอบสำเร็จหรือไม่
+  ldrCooldownStartMs = now;
+
+  float drop = ldrDropPercent();
+  bool started = startCycle();
+  ldrMessage = started
+    ? "Started by LDR: LDR35 is " + String(drop, 0) + "% below LDR34"
+    : "LDR start failed: " + cycleMessage;
+  ldrMessage.replace("\"", "'");
+  ldrMessage.replace("\n", " ");
+  ldrMessage.replace("\r", " ");
+}
+
+const char* ldrStateName() {
+  switch (ldrState) {
+    case LDR_OFF:        return "OFF";
+    case LDR_LOW_LIGHT:  return "LOW_LIGHT";
+    case LDR_NORMAL:     return "NORMAL";
+    case LDR_CONFIRMING: return "CONFIRMING";
+    case LDR_COOLDOWN:   return "COOLDOWN";
+    case LDR_RUNNING:    return "RUNNING";
+    case LDR_MANUAL:     return "MANUAL";
+  }
+  return "UNKNOWN";
+}
+
+// ==================================================
 // 14. แปลงสถานะเป็นข้อความ
 // ==================================================
 
@@ -611,6 +766,30 @@ button{border:1px solid #34435d;border-radius:13px;min-height:52px;padding:12px 
       <div class="info-title">POSITION (steps)</div>
       <div id="pos" class="info-value">0</div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>☀️ LDR Light Sensors</h2>
+    <div class="info-grid" style="margin-bottom:6px">
+      <div class="info">
+        <div class="info-title">LDR GPIO 34 (อ้างอิง)</div>
+        <div id="ldr34" class="info-value">---</div>
+        <small id="ldr34pct">--</small>
+      </div>
+      <div class="info">
+        <div class="info-title">LDR GPIO 35</div>
+        <div id="ldr35" class="info-value">---</div>
+        <small id="ldr35pct">--</small>
+      </div>
+    </div>
+    <div class="row"><span>LDR 35 ต่ำกว่า LDR 34</span><b id="ldrDrop">--</b></div>
+    <div class="row"><span>เกณฑ์สั่งงาน</span><b id="ldrThr">--</b></div>
+    <div class="row"><span>สถานะ LDR</span><b id="ldrState">--</b></div>
+    <div class="row"><span>ข้อความ</span><b id="ldrMsg">--</b></div>
+    <label style="display:flex;gap:10px;align-items:center;margin:14px 0 0;color:var(--text)">
+      <input id="ldrAuto" type="checkbox" style="width:20px;height:20px" onchange="setLdrAuto(this.checked)"> สั่งระบบทำงานอัตโนมัติด้วย LDR
+    </label>
+    <small>ค่าแสง 0-4095 (มาก = สว่าง) · ต้องต่ำกว่าเกณฑ์ต่อเนื่องสักครู่จึงสั่งงาน และมีช่วงพักรอบหลังจบงานเพื่อกันสั่งซ้ำ</small>
   </div>
 
   <div class="card">
@@ -754,6 +933,35 @@ async function saveScheduleTable() {
 
 const $ = id => document.getElementById(id);
 
+const LDR_STATE_TH = {
+  OFF: 'ปิดใช้งานอัตโนมัติ',
+  LOW_LIGHT: 'แสงอ้างอิงต่ำเกินไป',
+  NORMAL: 'ปกติ',
+  CONFIRMING: 'ตรวจพบความต่าง กำลังยืนยัน...',
+  COOLDOWN: 'พักรอบ (กันสั่งซ้ำ)',
+  RUNNING: 'กำลังทำงาน',
+  MANUAL: 'ควบคุมด้วยมืออยู่'
+};
+let ldrToggleAt = 0;
+
+async function setLdrAuto(on) {
+  ldrToggleAt = Date.now();
+  await cmd('/ldrauto?on=' + (on ? 1 : 0));
+}
+
+function updateLdrUi(s) {
+  if (s.ldr34 === undefined) return;
+  $('ldr34').textContent = s.ldr34;
+  $('ldr35').textContent = s.ldr35;
+  $('ldr34pct').textContent = Math.round(s.ldr34 / 4095 * 100) + '% ของช่วงวัด';
+  $('ldr35pct').textContent = Math.round(s.ldr35 / 4095 * 100) + '% ของช่วงวัด';
+  $('ldrDrop').textContent = Number(s.ldrDropPct).toFixed(1) + '%';
+  $('ldrThr').textContent = '> ' + s.ldrThresholdPct + '% (LDR 34 ≥ ' + s.ldrMinRef + ')';
+  $('ldrState').textContent = LDR_STATE_TH[s.ldrState] || s.ldrState;
+  $('ldrMsg').textContent = s.ldrMessage || '--';
+  if (Date.now() - ldrToggleAt > 2500) $('ldrAuto').checked = !!s.ldrAuto;
+}
+
 async function refreshStatus() {
   try {
     const r = await fetch('/status');
@@ -774,6 +982,7 @@ async function refreshStatus() {
     $('right').textContent = s.right;
     $('speedVal').textContent = s.speed;
     $('speed').value = s.speed;
+    updateLdrUi(s);
     $('clock').textContent = s.clock || 'Not synced';
     $('scheduleState').textContent = s.scheduleEnabled ? 'ON' : 'OFF';
     $('scheduleMessage').textContent = s.scheduleMessage || '--';
@@ -899,6 +1108,19 @@ void handleSpeed() {
   reply(200, "text/plain", String(speedSPS));
 }
 
+void handleLdrAuto() {
+  if (!server.hasArg("on")) {
+    reply(400, "text/plain; charset=utf-8", "Missing on parameter");
+    return;
+  }
+
+  ldrAutoEnabled = (server.arg("on") == "1");
+  saveLdrSetting();
+  ldrMessage = ldrAutoEnabled ? "LDR auto-start enabled" : "LDR auto-start disabled";
+
+  reply(200, "text/plain; charset=utf-8", ldrAutoEnabled ? "LDR auto ON" : "LDR auto OFF");
+}
+
 void handleSchedule() {
   if (server.hasArg("cancel")) {
     scheduleEnabled = false;
@@ -1010,6 +1232,16 @@ void handleStatus() {
   json += "\"position\":" + String(positionSteps) + ",";
   json += "\"speed\":" + String(speedSPS) + ",";
 
+  // LDR: ค่าแสง 0-4095 (มาก = สว่าง)
+  json += "\"ldr34\":" + String((int)(ldr34Light + 0.5f)) + ",";
+  json += "\"ldr35\":" + String((int)(ldr35Light + 0.5f)) + ",";
+  json += "\"ldrDropPct\":" + String(ldrDropPercent(), 1) + ",";
+  json += "\"ldrThresholdPct\":" + String(LDR_DROP_PERCENT, 0) + ",";
+  json += "\"ldrMinRef\":" + String(LDR_MIN_REF_LIGHT) + ",";
+  json += "\"ldrAuto\":" + String(ldrAutoEnabled ? "true" : "false") + ",";
+  json += "\"ldrState\":\"" + String(ldrStateName()) + "\",";
+  json += "\"ldrMessage\":\"" + ldrMessage + "\",";
+
   // ฟิลด์เพิ่มเติมสำหรับ Dashboard บน Cloudflare (index.html)
   json += "\"running\":";
   json += (railMoving || brushOn || pumpOn) ? "true," : "false,";
@@ -1068,6 +1300,7 @@ void setupWebServer() {
   server.on("/pump", HTTP_GET, handlePump);
   server.on("/speed", HTTP_GET, handleSpeed);
   server.on("/schedule", HTTP_GET, handleSchedule);
+  server.on("/ldrauto", HTTP_GET, handleLdrAuto);
   server.on("/status", HTTP_GET, handleStatus);
   server.onNotFound(handleNotFound);
 
@@ -1081,6 +1314,7 @@ void setupWebServer() {
 void setup() {
   Serial.begin(115200);
   loadSchedule();
+  loadLdrSetting();
 
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
@@ -1088,6 +1322,13 @@ void setup() {
 
   pinMode(LIMIT_LEFT_PIN, INPUT_PULLUP);
   pinMode(LIMIT_RIGHT_PIN, INPUT_PULLUP);
+
+  // LDR: อ่านเต็มช่วง 0-3.3 V ที่ 12 บิต
+  pinMode(LDR34_PIN, INPUT);
+  pinMode(LDR35_PIN, INPUT);
+  analogReadResolution(12);
+  analogSetPinAttenuation(LDR34_PIN, ADC_11db);
+  analogSetPinAttenuation(LDR35_PIN, ADC_11db);
 
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(BRUSH_RELAY_PIN, OUTPUT);
@@ -1169,6 +1410,9 @@ void loop() {
   } else if (pressedEvent(startButton)) {
     startCycle();
   }
+
+  updateLdr();
+  updateLdrAutoStart();
 
   updateCycle();
   updateManualLimits();

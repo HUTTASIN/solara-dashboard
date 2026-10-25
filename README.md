@@ -43,6 +43,7 @@ the file, unchanged from the original firmware) as a station and serves:
 | GET    | `/pump?on=1\|0`     | manual pump                                                    |
 | GET    | `/speed?value=N`    | rail speed, 100–800 steps/sec                                  |
 | GET    | `/schedule?...`     | save the auto schedule (see below)                             |
+| GET    | `/ldrauto?on=1\|0` | enable / disable auto-start from the LDR comparison (saved in flash) |
 
 ### Auto schedule (time + weekdays)
 
@@ -66,6 +67,26 @@ time only if their days don't overlap. Saved days live in flash (key `dy<i>`);
 firmware older than this version has no `dy` keys, so existing slots default to
 every day. **Re-flash `Solasale_project.ino`** after updating `index.html`, otherwise
 the old firmware ignores the website's day selection.
+
+### LDR light sensors (GPIO 34 + GPIO 35)
+
+Two LDRs are read on ADC1 (works with Wi-Fi). Wire each as a voltage divider
+(3V3 -> LDR -> GPIO -> fixed resistor ~10 kOhm -> GND). `/status` adds
+`ldr34`, `ldr35` (0-4095, higher = brighter), `ldrDropPct`, `ldrThresholdPct`,
+`ldrMinRef`, `ldrAuto`, `ldrState`, `ldrMessage`, and both dashboards show them.
+
+**Auto-start rule:** when LDR 35 is more than 30 % below LDR 34 the firmware runs
+START (same as the button). To avoid false triggers and endless re-runs:
+
+- the condition must hold for `LDR_HOLD_MS` (5 s);
+- LDR 34 must read at least `LDR_MIN_REF_LIGHT` (300) so it never fires in the dark;
+- after any cycle ends (or is stopped) it waits `LDR_COOLDOWN_MS` (30 min) before it may fire again;
+- it never fires while the machine is already running or being driven manually;
+- the dashboard checkbox (or `/ldrauto?on=0`) switches the rule off; the choice survives reboot.
+
+Tunables near the top of the `.ino`: `LDR_DROP_PERCENT`, `LDR_MIN_REF_LIGHT`,
+`LDR_HOLD_MS`, `LDR_COOLDOWN_MS`, and `LDR_HIGHER_IS_BRIGHTER` (set `false` if
+your wiring makes the ADC value fall when it gets brighter).
 
 ### What START does (web button or physical button)
 
