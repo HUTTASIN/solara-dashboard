@@ -241,7 +241,7 @@ select,input[type=date]{background:var(--panel-2);border:1px solid var(--border)
 //   GET /speed?value=N    -> rail speed, 100-800 steps/sec
 //   GET /ldrauto?on=1|0   -> enable/disable auto-start from the LDR comparison
 //   GET /status           -> {cycle,message,rail,brush,pump,left,right,position,speed,running,direction,legsDone,legsTotal,
-//                             ldr34,ldr35,ldrDropPct,ldrThresholdPct,ldrMinRef,ldrAuto,ldrState,ldrMessage}
+//                             ldr34,ldr35,ldrRisePct,ldrThresholdPct,ldrMaxRef,ldrAuto,ldrState,ldrMessage}
 const Device = {
   ip: (()=>{ try{ return localStorage.getItem('esp32_ip') || ''; }catch(e){ return ''; } })(),
   connected: false,
@@ -479,17 +479,17 @@ async function renderMonitoring(el){
           <div class="metric-sub" id="ldr35Pct">--</div>
         </div>
         <div>
-          <div class="metric-sub">LDR 35 ต่ำกว่า LDR 34</div>
+          <div class="metric-sub">LDR 35 สูงกว่า LDR 34</div>
           <div class="metric-big" id="ldrDropVal">---</div>
           <div class="metric-sub" id="ldrThrTxt">เกณฑ์สั่งงาน: --</div>
           <div style="margin-top:8px;"><span class="badge b-warn" id="ldrStateBadge">---</span></div>
         </div>
       </div>
       <label style="display:flex;gap:10px;align-items:center;margin-top:16px;font-size:13px;cursor:pointer;">
-        <input type="checkbox" id="ldrAutoChk" style="width:18px;height:18px;"> สั่งระบบทำงานอัตโนมัติเมื่อ LDR 35 ต่ำกว่า LDR 34 เกินเกณฑ์
+        <input type="checkbox" id="ldrAutoChk" style="width:18px;height:18px;"> สั่งระบบทำงานอัตโนมัติเมื่อ LDR 35 สูงกว่า LDR 34 เกินเกณฑ์
       </label>
       <div class="sensor-row" style="margin-top:8px;"><span>ข้อความ LDR</span><b id="ldrMsgTxt" style="text-align:right;">---</b></div>
-      <div class="hint">ค่าแสง 0-4095 (มาก = สว่าง) · ต้องต่ำกว่าเกณฑ์ต่อเนื่องสักครู่จึงสั่งงาน และมีช่วงพักรอบหลังจบงานเพื่อกันสั่งซ้ำ${Device.ip?'':' · ยังไม่ได้เชื่อมต่อ ESP32 จึงยังไม่มีค่าจริง'}</div>
+      <div class="hint">ค่า ADC 0-4095 (แสงมาก = ค่าน้อย, มืด = ค่ามาก) · ต้องสูงกว่าเกณฑ์ต่อเนื่องสักครู่จึงสั่งงาน และมีช่วงพักรอบหลังจบงานเพื่อกันสั่งซ้ำ${Device.ip?'':' · ยังไม่ได้เชื่อมต่อ ESP32 จึงยังไม่มีค่าจริง'}</div>
     </div>
 
     <div class="card c3">
@@ -577,16 +577,16 @@ async function renderMonitoring(el){
   $('brushOffBtn').onclick=()=>sendMotor('แปรง OFF',()=>Device.brush(false),'แปรง OFF (mock)');
   $('pumpOnBtn').onclick=()=>sendMotor('ปั๊ม ON',()=>Device.pump(true),'ปั๊ม ON (mock)');
   $('pumpOffBtn').onclick=()=>sendMotor('ปั๊ม OFF',()=>Device.pump(false),'ปั๊ม OFF (mock)');
-  const LDR_STATE_TH={OFF:'ปิดอัตโนมัติ',LOW_LIGHT:'แสงอ้างอิงต่ำเกินไป',NORMAL:'ปกติ',CONFIRMING:'กำลังยืนยัน...',COOLDOWN:'พักรอบ (กันสั่งซ้ำ)',RUNNING:'กำลังทำงาน',MANUAL:'ควบคุมด้วยมือ'};
+  const LDR_STATE_TH={OFF:'ปิดอัตโนมัติ',LOW_LIGHT:'LDR 34 มืดเกินไป (ไม่สั่งงาน)',NORMAL:'ปกติ',CONFIRMING:'กำลังยืนยัน...',COOLDOWN:'พักรอบ (กันสั่งซ้ำ)',RUNNING:'กำลังทำงาน',MANUAL:'ควบคุมด้วยมือ'};
   let ldrToggleAt=0;
   function updateLdr(s){
     if(s.ldr34===undefined) return;
     const pct=v=>Math.max(0,Math.min(100,Math.round(v/4095*100)));
     $('ldr34Val').textContent=s.ldr34; $('ldr35Val').textContent=s.ldr35;
     $('ldr34Bar').style.width=pct(s.ldr34)+'%'; $('ldr35Bar').style.width=pct(s.ldr35)+'%';
-    $('ldr34Pct').textContent=`${pct(s.ldr34)}% ของช่วงวัด (0-4095)`; $('ldr35Pct').textContent=`${pct(s.ldr35)}% ของช่วงวัด (0-4095)`;
-    $('ldrDropVal').textContent=`${Number(s.ldrDropPct).toFixed(1)}%`;
-    $('ldrThrTxt').textContent=`เกณฑ์สั่งงาน: > ${s.ldrThresholdPct}% (LDR 34 ≥ ${s.ldrMinRef})`;
+    $('ldr34Pct').textContent=`${pct(s.ldr34)}% ของช่วง ADC (0-4095)`; $('ldr35Pct').textContent=`${pct(s.ldr35)}% ของช่วง ADC (0-4095)`;
+    $('ldrDropVal').textContent=`${Number(s.ldrRisePct).toFixed(1)}%`;
+    $('ldrThrTxt').textContent=`เกณฑ์สั่งงาน: > ${s.ldrThresholdPct}% (LDR 34 ≤ ${s.ldrMaxRef})`;
     const b=$('ldrStateBadge'); b.textContent=LDR_STATE_TH[s.ldrState]||s.ldrState;
     b.className='badge '+((s.ldrState==='NORMAL'||s.ldrState==='RUNNING')?'b-ok':'b-warn');
     $('ldrMsgTxt').textContent=s.ldrMessage||'--';

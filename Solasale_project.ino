@@ -81,12 +81,11 @@ const uint8_t SWEEP_LEGS = 2;
 const unsigned long LEG_TIMEOUT_MS = 360000UL;   // 6 นาที
 
 // ---- LDR สั่งงานอัตโนมัติ ----
-// เงื่อนไข: ค่าแสง LDR35 ต่ำกว่า LDR34 มากกว่า LDR_DROP_PERCENT % -> สั่ง START อัตโนมัติ
-// ค่าที่อ่านเป็น ADC 12 บิต (0-4095) ยิ่งมาก = ยิ่งสว่าง
-// ถ้าวงจรของคุณต่อกลับด้าน (สว่างแล้วค่า ADC ลดลง) ให้เปลี่ยนเป็น false
-const bool LDR_HIGHER_IS_BRIGHTER = true;
-const float LDR_DROP_PERCENT = 30.0;                 // LDR35 ต้องต่ำกว่า LDR34 อย่างน้อยกี่ %
-const int LDR_MIN_REF_LIGHT = 300;                   // LDR34 ต้องสว่างอย่างน้อยเท่านี้ (กันสั่งงานตอนมืด/ค่านิ่งต่ำ)
+// ใช้ "ค่าดิบ ADC 12 บิต (0-4095)" ตรงๆ: แสงมาก = ค่าน้อย / แสงน้อย (มืด) = ค่ามาก
+// เงื่อนไข: ค่า LDR35 สูงกว่า LDR34 มากกว่า LDR_RISE_PERCENT % (35 มืดกว่า 34) -> สั่ง START อัตโนมัติ
+const float LDR_RISE_PERCENT = 30.0;                 // LDR35 ต้องสูงกว่า LDR34 อย่างน้อยกี่ %
+const int LDR_MAX_REF_RAW = 3800;                    // LDR34 ต้องไม่เกินค่านี้ (ถ้าสูงกว่า = มืดมาก/กลางคืน ไม่สั่งงาน)
+const int LDR_MIN_REF_RAW = 100;                     // ฐานต่ำสุดตอนคำนวณ % กันหารค่าใกล้ 0 เวลาแดดจัด
 const unsigned long LDR_HOLD_MS = 5000UL;            // เงื่อนไขต้องคงอยู่ต่อเนื่องกี่ ms ก่อนสั่งงาน (กันเงา/นกบัง ชั่วคราว)
 const unsigned long LDR_COOLDOWN_MS = 1800000UL;     // หลังจบรอบ รอกี่ ms ก่อนยอมให้ LDR สั่งซ้ำ (30 นาที)
 
@@ -567,7 +566,7 @@ void updateManualLimits() {
 
 enum LdrState {
   LDR_OFF,
-  LDR_LOW_LIGHT,
+  LDR_LOW_LIGHT,   // LDR34 มืดเกินไป (ค่าสูงเกิน LDR_MAX_REF_RAW)
   LDR_NORMAL,
   LDR_CONFIRMING,
   LDR_COOLDOWN,
@@ -575,8 +574,8 @@ enum LdrState {
   LDR_MANUAL
 };
 
-float ldr34Light = 0;          // ค่าแสงที่กรองแล้ว 0-4095 (มาก = สว่าง)
-float ldr35Light = 0;
+float ldr34Raw = 0;            // ค่า ADC ที่กรองแล้ว 0-4095 (มาก = มืด)
+float ldr35Raw = 0;
 bool ldrReady = false;
 bool ldrAutoEnabled = true;    // สวิตช์เปิด/ปิดการสั่งงานด้วย LDR (บันทึกลง flash)
 LdrState ldrState = LDR_NORMAL;
@@ -592,11 +591,6 @@ void saveLdrSetting() {
   schedulePrefs.putBool("ldrAuto", ldrAutoEnabled);
 }
 
-int readLdrLight(uint8_t pin) {
-  int raw = analogRead(pin);
-  return LDR_HIGHER_IS_BRIGHTER ? raw : (4095 - raw);
-}
-
 // เฉลี่ย 8 ตัวอย่าง (ตัวอย่างละ 25 ms) แล้วทำ moving average ต่ออีกชั้น
 // อ่านทีละน้อยเพื่อไม่รบกวนจังหวะสเต็ปเปอร์
 void updateLdr() {
@@ -609,8 +603,8 @@ void updateLdr() {
   if (now - lastSampleMs < 25) return;
   lastSampleMs = now;
 
-  sum34 += readLdrLight(LDR34_PIN);
-  sum35 += readLdrLight(LDR35_PIN);
+  sum34 += analogRead(LDR34_PIN);
+  sum35 += analogRead(LDR35_PIN);
   count++;
   if (count < 8) return;
 
@@ -621,23 +615,23 @@ void updateLdr() {
   count = 0;
 
   if (!ldrReady) {
-    ldr34Light = avg34;
-    ldr35Light = avg35;
+    ldr34Raw = avg34;
+    ldr35Raw = avg35;
     ldrReady = true;
   } else {
-    ldr34Light += 0.25f * (avg34 - ldr34Light);
-    ldr35Light += 0.25f * (avg35 - ldr35Light);
+    ldr34Raw += 0.25f * (avg34 - ldr34Raw);
+    ldr35Raw += 0.25f * (avg35 - ldr35Raw);
   }
 }
 
-// LDR35 ต่ำกว่า LDR34 กี่ % (ค่าลบ = LDR35 สว่างกว่า)
-float ldrDropPercent() {
-  if (ldr34Light <= 1.0f) return 0.0f;
-  return (ldr34Light - ldr35Light) / ldr34Light * 100.0f;
+// LDR35 สูงกว่า LDR34 กี่ % (ค่าลบ = LDR35 ต่ำกว่า/สว่างกว่า)
+float ldrRisePercent() {
+  float base = ldr34Raw < LDR_MIN_REF_RAW ? (float)LDR_MIN_REF_RAW : ldr34Raw;
+  return (ldr35Raw - ldr34Raw) / base * 100.0f;
 }
 
 void updateLdrAutoStart() {
-  static unsigned long belowSinceMs = 0;   // 0 = เงื่อนไขยังไม่เกิด
+  static unsigned long aboveSinceMs = 0;   // 0 = เงื่อนไขยังไม่เกิด
   static bool cycleSeen = false;
 
   if (!ldrReady) return;
@@ -656,32 +650,32 @@ void updateLdrAutoStart() {
   }
 
   bool manual = !cycleRunning() && (railMoving || brushOn || pumpOn);
-  bool lowLight = ldr34Light < LDR_MIN_REF_LIGHT;
-  bool dropped = !lowLight && ldrDropPercent() > LDR_DROP_PERCENT;
+  bool tooDark = ldr34Raw > LDR_MAX_REF_RAW;
+  bool exceeded = !tooDark && ldrRisePercent() > LDR_RISE_PERCENT;
 
-  if (!ldrAutoEnabled) { ldrState = LDR_OFF;       belowSinceMs = 0; return; }
-  if (cycleRunning())  { ldrState = LDR_RUNNING;   belowSinceMs = 0; return; }
-  if (manual)          { ldrState = LDR_MANUAL;    belowSinceMs = 0; return; }
-  if (ldrCooldownActive) { ldrState = LDR_COOLDOWN; belowSinceMs = 0; return; }
-  if (lowLight)        { ldrState = LDR_LOW_LIGHT; belowSinceMs = 0; return; }
-  if (!dropped)        { ldrState = LDR_NORMAL;    belowSinceMs = 0; return; }
+  if (!ldrAutoEnabled) { ldrState = LDR_OFF;       aboveSinceMs = 0; return; }
+  if (cycleRunning())  { ldrState = LDR_RUNNING;   aboveSinceMs = 0; return; }
+  if (manual)          { ldrState = LDR_MANUAL;    aboveSinceMs = 0; return; }
+  if (ldrCooldownActive) { ldrState = LDR_COOLDOWN; aboveSinceMs = 0; return; }
+  if (tooDark)         { ldrState = LDR_LOW_LIGHT; aboveSinceMs = 0; return; }
+  if (!exceeded)       { ldrState = LDR_NORMAL;    aboveSinceMs = 0; return; }
 
-  // LDR35 ต่ำกว่าเกณฑ์: ต้องคงอยู่ต่อเนื่อง LDR_HOLD_MS ก่อนสั่งงาน
-  if (belowSinceMs == 0) {
-    belowSinceMs = now;
-    if (belowSinceMs == 0) belowSinceMs = 1;
+  // LDR35 สูงกว่าเกณฑ์: ต้องคงอยู่ต่อเนื่อง LDR_HOLD_MS ก่อนสั่งงาน
+  if (aboveSinceMs == 0) {
+    aboveSinceMs = now;
+    if (aboveSinceMs == 0) aboveSinceMs = 1;
   }
   ldrState = LDR_CONFIRMING;
-  if (now - belowSinceMs < LDR_HOLD_MS) return;
+  if (now - aboveSinceMs < LDR_HOLD_MS) return;
 
-  belowSinceMs = 0;
+  aboveSinceMs = 0;
   ldrCooldownActive = true;          // กันสั่งซ้ำ ไม่ว่าเริ่มรอบสำเร็จหรือไม่
   ldrCooldownStartMs = now;
 
-  float drop = ldrDropPercent();
+  float rise = ldrRisePercent();
   bool started = startCycle();
   ldrMessage = started
-    ? "Started by LDR: LDR35 is " + String(drop, 0) + "% below LDR34"
+    ? "Started by LDR: LDR35 is " + String(rise, 0) + "% above LDR34"
     : "LDR start failed: " + cycleMessage;
   ldrMessage.replace("\"", "'");
   ldrMessage.replace("\n", " ");
@@ -782,14 +776,14 @@ button{border:1px solid #34435d;border-radius:13px;min-height:52px;padding:12px 
         <small id="ldr35pct">--</small>
       </div>
     </div>
-    <div class="row"><span>LDR 35 ต่ำกว่า LDR 34</span><b id="ldrDrop">--</b></div>
+    <div class="row"><span>LDR 35 สูงกว่า LDR 34</span><b id="ldrDrop">--</b></div>
     <div class="row"><span>เกณฑ์สั่งงาน</span><b id="ldrThr">--</b></div>
     <div class="row"><span>สถานะ LDR</span><b id="ldrState">--</b></div>
     <div class="row"><span>ข้อความ</span><b id="ldrMsg">--</b></div>
     <label style="display:flex;gap:10px;align-items:center;margin:14px 0 0;color:var(--text)">
       <input id="ldrAuto" type="checkbox" style="width:20px;height:20px" onchange="setLdrAuto(this.checked)"> สั่งระบบทำงานอัตโนมัติด้วย LDR
     </label>
-    <small>ค่าแสง 0-4095 (มาก = สว่าง) · ต้องต่ำกว่าเกณฑ์ต่อเนื่องสักครู่จึงสั่งงาน และมีช่วงพักรอบหลังจบงานเพื่อกันสั่งซ้ำ</small>
+    <small>ค่า ADC 0-4095 (แสงมาก = ค่าน้อย, มืด = ค่ามาก) · ต้องสูงกว่าเกณฑ์ต่อเนื่องสักครู่จึงสั่งงาน และมีช่วงพักรอบหลังจบงานเพื่อกันสั่งซ้ำ</small>
   </div>
 
   <div class="card">
@@ -935,7 +929,7 @@ const $ = id => document.getElementById(id);
 
 const LDR_STATE_TH = {
   OFF: 'ปิดใช้งานอัตโนมัติ',
-  LOW_LIGHT: 'แสงอ้างอิงต่ำเกินไป',
+  LOW_LIGHT: 'LDR 34 มืดเกินไป (ไม่สั่งงาน)',
   NORMAL: 'ปกติ',
   CONFIRMING: 'ตรวจพบความต่าง กำลังยืนยัน...',
   COOLDOWN: 'พักรอบ (กันสั่งซ้ำ)',
@@ -953,10 +947,10 @@ function updateLdrUi(s) {
   if (s.ldr34 === undefined) return;
   $('ldr34').textContent = s.ldr34;
   $('ldr35').textContent = s.ldr35;
-  $('ldr34pct').textContent = Math.round(s.ldr34 / 4095 * 100) + '% ของช่วงวัด';
-  $('ldr35pct').textContent = Math.round(s.ldr35 / 4095 * 100) + '% ของช่วงวัด';
-  $('ldrDrop').textContent = Number(s.ldrDropPct).toFixed(1) + '%';
-  $('ldrThr').textContent = '> ' + s.ldrThresholdPct + '% (LDR 34 ≥ ' + s.ldrMinRef + ')';
+  $('ldr34pct').textContent = Math.round(s.ldr34 / 4095 * 100) + '% ของช่วง ADC';
+  $('ldr35pct').textContent = Math.round(s.ldr35 / 4095 * 100) + '% ของช่วง ADC';
+  $('ldrDrop').textContent = Number(s.ldrRisePct).toFixed(1) + '%';
+  $('ldrThr').textContent = '> ' + s.ldrThresholdPct + '% (LDR 34 ≤ ' + s.ldrMaxRef + ')';
   $('ldrState').textContent = LDR_STATE_TH[s.ldrState] || s.ldrState;
   $('ldrMsg').textContent = s.ldrMessage || '--';
   if (Date.now() - ldrToggleAt > 2500) $('ldrAuto').checked = !!s.ldrAuto;
@@ -1232,12 +1226,12 @@ void handleStatus() {
   json += "\"position\":" + String(positionSteps) + ",";
   json += "\"speed\":" + String(speedSPS) + ",";
 
-  // LDR: ค่าแสง 0-4095 (มาก = สว่าง)
-  json += "\"ldr34\":" + String((int)(ldr34Light + 0.5f)) + ",";
-  json += "\"ldr35\":" + String((int)(ldr35Light + 0.5f)) + ",";
-  json += "\"ldrDropPct\":" + String(ldrDropPercent(), 1) + ",";
-  json += "\"ldrThresholdPct\":" + String(LDR_DROP_PERCENT, 0) + ",";
-  json += "\"ldrMinRef\":" + String(LDR_MIN_REF_LIGHT) + ",";
+  // LDR: ค่าดิบ ADC 0-4095 (มาก = มืด)
+  json += "\"ldr34\":" + String((int)(ldr34Raw + 0.5f)) + ",";
+  json += "\"ldr35\":" + String((int)(ldr35Raw + 0.5f)) + ",";
+  json += "\"ldrRisePct\":" + String(ldrRisePercent(), 1) + ",";
+  json += "\"ldrThresholdPct\":" + String(LDR_RISE_PERCENT, 0) + ",";
+  json += "\"ldrMaxRef\":" + String(LDR_MAX_REF_RAW) + ",";
   json += "\"ldrAuto\":" + String(ldrAutoEnabled ? "true" : "false") + ",";
   json += "\"ldrState\":\"" + String(ldrStateName()) + "\",";
   json += "\"ldrMessage\":\"" + ldrMessage + "\",";
